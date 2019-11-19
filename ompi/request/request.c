@@ -29,6 +29,7 @@
 
 #include "ompi/communicator/communicator.h"
 #include "opal/class/opal_object.h"
+#include "opal/sys/atomic.h"
 #include "ompi/request/request.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
@@ -49,6 +50,24 @@ ompi_request_fns_t               ompi_request_functions = {
     ompi_request_default_wait_some
 };
 
+
+/**
+ * LIFO of completed requests that need the user-defined completion callback
+ * invoked. Use atomic push to avoid race conditions if multiple threads
+ * complete requests.
+ */
+static opal_lifo_t request_complete_lifo;
+
+/**
+ * Flag indicating whether the progress callback has been registered.
+ */
+static opal_atomic_int32_t progress_callback_registered;
+
+/**
+ * Progress completed requests whose user-callback are pending.
+ */
+static int ompi_request_progress_user_completion();
+
 static void ompi_request_construct(ompi_request_t* req)
 {
     /* don't call _INIT, we don't to set the request to _INACTIVE and there will
@@ -63,6 +82,9 @@ static void ompi_request_construct(ompi_request_t* req)
     req->req_complete_cb_data = NULL;
     req->req_f_to_c_index = MPI_UNDEFINED;
     req->req_mpi_object.comm = (struct ompi_communicator_t*) NULL;
+    req->user_req_complete_cb = NULL;
+    req->user_req_complete_cb_data = NULL;
+    opal_atomic_lock_init(&req->lock, OPAL_ATOMIC_LOCK_UNLOCKED);
 }
 
 static void ompi_request_destruct(ompi_request_t* req)
@@ -173,12 +195,18 @@ int ompi_request_init(void)
     ompi_status_empty._ucount = 0;
     ompi_status_empty._cancelled = 0;
 
+    progress_callback_registered = 0;
+
+    OBJ_CONSTRUCT(&request_complete_lifo, opal_lifo_t);
+
     return OMPI_SUCCESS;
 }
 
 
 int ompi_request_finalize(void)
 {
+    opal_progress_unregister(&ompi_request_progress_user_completion);
+    OBJ_DESTRUCT(&request_complete_lifo);
     OMPI_REQUEST_FINI( &ompi_request_null.request );
     OBJ_DESTRUCT( &ompi_request_null.request );
     OMPI_REQUEST_FINI( &ompi_request_empty );
@@ -208,4 +236,35 @@ int ompi_request_persistent_noop_create(ompi_request_t** request)
 
     *request = req;
     return OMPI_SUCCESS;
+}
+
+static
+int ompi_request_progress_user_completion()
+{
+    int count = 0;
+    ompi_request_t *request;
+
+    if (opal_lifo_is_empty(&request_complete_lifo)) return 0;
+
+    while (NULL != (request = (ompi_request_t*)opal_lifo_pop(&request_complete_lifo))) {
+        request->user_req_complete_cb(request->user_req_complete_cb_data, request);
+        request->user_req_complete_cb = NULL;
+        request->user_req_complete_cb_data = NULL;
+        ++count;
+    }
+
+    return count;
+}
+
+void
+ompi_request_enqueue_user_cb(ompi_request_t *request)
+{
+    opal_lifo_push(&request_complete_lifo, &request->super.super);
+    if (!progress_callback_registered) {
+        int32_t oldval = 0;
+        if (opal_atomic_compare_exchange_strong_32(&progress_callback_registered,
+                                                   &oldval, 1)) {
+            opal_progress_register(ompi_request_progress_user_completion);
+        }
+    }
 }
