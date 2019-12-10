@@ -205,7 +205,9 @@ int ompi_request_init(void)
 
 int ompi_request_finalize(void)
 {
-    opal_progress_unregister(&ompi_request_progress_user_completion);
+    if (progress_callback_registered) {
+        opal_progress_unregister(&ompi_request_progress_user_completion);
+    }
     OBJ_DESTRUCT(&request_complete_lifo);
     OMPI_REQUEST_FINI( &ompi_request_null.request );
     OBJ_DESTRUCT( &ompi_request_null.request );
@@ -241,19 +243,18 @@ int ompi_request_persistent_noop_create(ompi_request_t** request)
 static
 int ompi_request_progress_user_completion()
 {
-    int count = 0;
+    int completed = 0;
     ompi_request_t *request;
 
     if (opal_lifo_is_empty(&request_complete_lifo)) return 0;
 
     while (NULL != (request = (ompi_request_t*)opal_lifo_pop(&request_complete_lifo))) {
+        MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
         request->user_req_complete_cb(request->user_req_complete_cb_data, request);
-        request->user_req_complete_cb = NULL;
-        request->user_req_complete_cb_data = NULL;
-        ++count;
+        completed++;
     }
 
-    return count;
+    return completed;
 }
 
 void
@@ -261,9 +262,7 @@ ompi_request_enqueue_user_cb(ompi_request_t *request)
 {
     opal_lifo_push(&request_complete_lifo, &request->super.super);
     if (!progress_callback_registered) {
-        int32_t oldval = 0;
-        if (opal_atomic_compare_exchange_strong_32(&progress_callback_registered,
-                                                   &oldval, 1)) {
+        if (0 == opal_atomic_swap_32(&progress_callback_registered, 1)) {
             opal_progress_register(ompi_request_progress_user_completion);
         }
     }

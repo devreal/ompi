@@ -491,6 +491,8 @@ static inline int ompi_request_register_user_completion_cb(
     if (invoke_direct) {
         cb(cb_data, request);
     }
+
+    return OMPI_SUCCESS;
 }
 
 END_C_DECLS
