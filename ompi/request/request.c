@@ -52,11 +52,11 @@ ompi_request_fns_t               ompi_request_functions = {
 
 
 /**
- * LIFO of completed requests that need the user-defined completion callback
+ * FIFO of completed requests that need the user-defined completion callback
  * invoked. Use atomic push to avoid race conditions if multiple threads
  * complete requests.
  */
-static opal_lifo_t request_complete_lifo;
+static opal_fifo_t request_complete_fifo;
 
 /**
  * Flag indicating whether the progress callback has been registered.
@@ -197,7 +197,7 @@ int ompi_request_init(void)
 
     progress_callback_registered = 0;
 
-    OBJ_CONSTRUCT(&request_complete_lifo, opal_lifo_t);
+    OBJ_CONSTRUCT(&request_complete_fifo, opal_fifo_t);
 
     return OMPI_SUCCESS;
 }
@@ -208,7 +208,7 @@ int ompi_request_finalize(void)
     if (progress_callback_registered) {
         opal_progress_unregister(&ompi_request_progress_user_completion);
     }
-    OBJ_DESTRUCT(&request_complete_lifo);
+    OBJ_DESTRUCT(&request_complete_fifo);
     OMPI_REQUEST_FINI( &ompi_request_null.request );
     OBJ_DESTRUCT( &ompi_request_null.request );
     OMPI_REQUEST_FINI( &ompi_request_empty );
@@ -246,9 +246,9 @@ int ompi_request_progress_user_completion()
     int completed = 0;
     ompi_request_t *request;
 
-    if (opal_lifo_is_empty(&request_complete_lifo)) return 0;
+    if (opal_fifo_is_empty(&request_complete_fifo)) return 0;
 
-    while (NULL != (request = (ompi_request_t*)opal_lifo_pop(&request_complete_lifo))) {
+    while (NULL != (request = (ompi_request_t*)opal_fifo_pop(&request_complete_fifo))) {
         MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
         request->user_req_complete_cb(request->user_req_complete_cb_data, request);
         completed++;
@@ -260,7 +260,7 @@ int ompi_request_progress_user_completion()
 void
 ompi_request_enqueue_user_cb(ompi_request_t *request)
 {
-    opal_lifo_push(&request_complete_lifo, &request->super.super);
+    opal_fifo_push(&request_complete_fifo, &request->super.super);
     if (!progress_callback_registered) {
         if (0 == opal_atomic_swap_32(&progress_callback_registered, 1)) {
             opal_progress_register(ompi_request_progress_user_completion);
