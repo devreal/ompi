@@ -29,6 +29,7 @@
 
 #include "ompi/communicator/communicator.h"
 #include "opal/class/opal_object.h"
+#include "opal/class/opal_fifo.h"
 #include "opal/sys/atomic.h"
 #include "ompi/request/request.h"
 #include "ompi/request/request_default.h"
