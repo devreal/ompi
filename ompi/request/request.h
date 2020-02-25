@@ -31,6 +31,7 @@
 #ifndef OMPI_REQUEST_H
 #define OMPI_REQUEST_H
 
+#include <assert.h>
 #include "ompi_config.h"
 #include "mpi.h"
 #include "opal/class/opal_free_list.h"
@@ -181,6 +182,8 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
         (request)->req_persistent = (persistent);               \
         (request)->req_complete_cb  = NULL;                     \
         (request)->req_complete_cb_data = NULL;                 \
+        (request)->user_req_complete_cb  = NULL;                \
+        (request)->user_req_complete_cb_data = NULL;            \
     } while (0);
 
 
@@ -386,6 +389,7 @@ static inline int ompi_request_cancel(ompi_request_t* request)
  */
 static inline int ompi_request_free(ompi_request_t** request)
 {
+    //assert((*request)->user_req_complete_cb == NULL);
     return (*request)->req_free(request);
 }
 
@@ -479,7 +483,7 @@ static inline int ompi_request_register_user_completion_cb(
 {
     bool invoke_direct = false;
     opal_atomic_lock(&request->lock);
-    if (REQUEST_COMPLETED == request->req_complete) {
+    if (REQUEST_COMPLETE(request)) {
         /* the request has been completed already, invoke directly */
         invoke_direct = true;
     } else {

@@ -34,6 +34,7 @@
 #include "ompi/request/request.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
+#include "opal/class/opal_fifo.h"
 
 opal_pointer_array_t             ompi_request_f_to_c_table = {{0}};
 ompi_predefined_request_t        ompi_request_null = {{{{{0}}}}};
@@ -251,7 +252,10 @@ int ompi_request_progress_user_completion()
 
     while (NULL != (request = (ompi_request_t*)opal_fifo_pop(&request_complete_fifo))) {
         MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
-        request->user_req_complete_cb(request->user_req_complete_cb_data, request);
+        void *cb_data = request->user_req_complete_cb_data;
+        request->user_req_complete_cb = NULL;
+        request->user_req_complete_cb_data = NULL;
+        cb(cb_data, request);
         completed++;
     }
 
