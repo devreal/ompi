@@ -300,6 +300,7 @@ nodist_libmpi_c_pmpi_la_SOURCES = \
         prequest_free.c \
         prequest_get_status.c \
         prequest_on_completion.c \
+        pprogress.c \
 	prget.c \
 	prget_accumulate.c \
 	prput.c \
