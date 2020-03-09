@@ -66,6 +66,11 @@ static volatile opal_progress_callback_t *callbacks_lp = NULL;
 static size_t callbacks_lp_len = 0;
 static size_t callbacks_lp_size = 0;
 
+static volatile opal_progress_callback_t *callbacks_post = NULL;
+static size_t callbacks_post_len = 0;
+static size_t callbacks_post_size = 0;
+
+
 /* do we want to call sched_yield() if nothing happened */
 bool opal_progress_yield_when_idle = false;
 
@@ -85,6 +90,8 @@ static opal_atomic_int32_t num_event_users = 0;
 #if OPAL_ENABLE_DEBUG
 static int debug_output = -1;
 #endif
+
+static uint64_t opal_progress_called = 0;
 
 /**
  * Fake callback used for threading purpose when one thread
@@ -114,6 +121,13 @@ static void opal_progress_finalize (void)
     free ((void *) callbacks_lp);
     callbacks_lp = NULL;
 
+    callbacks_post_len = 0;
+    callbacks_post_size = 0;
+    free ((void *) callbacks_post);
+    callbacks_post = NULL;
+
+    printf("opal_progress_called %lu\n", opal_progress_called);
+
     opal_atomic_unlock(&progress_lock);
 }
 
@@ -134,16 +148,18 @@ opal_progress_init(void)
     }
 #endif
 
-    callbacks_size = callbacks_lp_size = 8;
+    callbacks_size = callbacks_lp_size = callbacks_post_size = 8;
 
     callbacks = malloc (callbacks_size * sizeof (callbacks[0]));
     callbacks_lp = malloc (callbacks_lp_size * sizeof (callbacks_lp[0]));
+    callbacks_post = malloc (callbacks_post_size * sizeof (callbacks_post[0]));
 
-    if (NULL == callbacks || NULL == callbacks_lp) {
+    if (NULL == callbacks || NULL == callbacks_lp || NULL == callbacks_post) {
         free ((void *) callbacks);
         free ((void *) callbacks_lp);
-        callbacks_size = callbacks_lp_size = 0;
-        callbacks = callbacks_lp = NULL;
+        free ((void *) callbacks_post);
+        callbacks_size = callbacks_lp_size = callbacks_post_size = 0;
+        callbacks = callbacks_lp = callbacks_post = NULL;
         return OPAL_ERR_OUT_OF_RESOURCE;
     }
 
@@ -154,6 +170,11 @@ opal_progress_init(void)
     for (size_t i = 0 ; i < callbacks_lp_size ; ++i) {
         callbacks_lp[i] = fake_cb;
     }
+
+    for (size_t i = 0 ; i < callbacks_post_size ; ++i) {
+        callbacks_post[i] = fake_cb;
+    }
+
 
     OPAL_OUTPUT((debug_output, "progress: initialized event flag to: %x",
                  opal_progress_event_flag));
@@ -226,6 +247,8 @@ opal_progress(void)
     size_t i;
     int events = 0;
 
+    opal_atomic_add_fetch_64(&opal_progress_called, 1);
+
     /* progress all registered callbacks */
     for (i = 0 ; i < callbacks_len ; ++i) {
         events += (callbacks[i])();
@@ -247,6 +270,16 @@ opal_progress(void)
         opal_progress_events();
     }
 
+    /* progress all registered post callbacks */
+    for (i = 0 ; i < callbacks_post_len ; ++i) {
+        events += (callbacks_post[i])();
+    }
+
+    // TODO: there seems to be a bug in OMPI where some 
+    //       processes yield even though they are not supposed to.
+    //       Investigate that!
+    //       The bug occurs with NPN>1 and only on one (the first?) node!
+#if 0
 #if OPAL_HAVE_SCHED_YIELD
     if (opal_progress_yield_when_idle && events <= 0) {
         /* If there is nothing to do - yield the processor - otherwise
@@ -257,6 +290,7 @@ opal_progress(void)
         sched_yield();
     }
 #endif  /* defined(HAVE_SCHED_YIELD) */
+#endif
 }
 
 
@@ -323,6 +357,8 @@ opal_progress_set_yield_when_idle(bool yieldopt)
 
     OPAL_OUTPUT((debug_output, "progress: progress_set_yield_when_idle to %s",
                                     opal_progress_yield_when_idle ? "true" : "false"));
+
+    printf("yield when idle: %s\n", opal_progress_yield_when_idle ? "true" : "false");
 
     return tmp;
 }
@@ -433,6 +469,7 @@ int opal_progress_register (opal_progress_callback_t cb)
     opal_atomic_lock(&progress_lock);
 
     (void) _opal_progress_unregister (cb, callbacks_lp, &callbacks_lp_len);
+    (void) _opal_progress_unregister (cb, callbacks_post, &callbacks_post_len);
 
     ret = _opal_progress_register (cb, &callbacks, &callbacks_size, &callbacks_len);
 
@@ -448,6 +485,7 @@ int opal_progress_register_lp (opal_progress_callback_t cb)
     opal_atomic_lock(&progress_lock);
 
     (void) _opal_progress_unregister (cb, callbacks, &callbacks_len);
+    (void) _opal_progress_unregister (cb, callbacks_post, &callbacks_post_len);
 
     ret = _opal_progress_register (cb, &callbacks_lp, &callbacks_lp_size, &callbacks_lp_len);
 
@@ -455,6 +493,23 @@ int opal_progress_register_lp (opal_progress_callback_t cb)
 
     return ret;
 }
+
+int opal_progress_register_post (opal_progress_callback_t cb)
+{
+    int ret;
+
+    opal_atomic_lock(&progress_lock);
+
+    (void) _opal_progress_unregister (cb, callbacks, &callbacks_len);
+    (void) _opal_progress_unregister (cb, callbacks_lp, &callbacks_lp_len);
+
+    ret = _opal_progress_register (cb, &callbacks_post, &callbacks_post_size, &callbacks_post_len);
+
+    opal_atomic_unlock(&progress_lock);
+
+    return ret;
+}
+
 
 static int _opal_progress_unregister (opal_progress_callback_t cb, volatile opal_progress_callback_t *callback_array,
                                       size_t *callback_array_len)
@@ -492,6 +547,11 @@ int opal_progress_unregister (opal_progress_callback_t cb)
         /* if not in the high-priority array try to remove from the lp array.
          * a callback will never be in both. */
         ret = _opal_progress_unregister (cb, callbacks_lp, &callbacks_lp_len);
+
+        if (OPAL_SUCCESS != ret) {
+           /* if not in low priority either try to remove from post callbacks */
+           ret = _opal_progress_unregister (cb, callbacks_post, &callbacks_post_len);
+        }
     }
 
     opal_atomic_unlock(&progress_lock);

@@ -499,6 +499,8 @@ static inline int ompi_request_register_user_completion_cb(
     return OMPI_SUCCESS;
 }
 
+int ompi_request_progress_user_completion();
+
 END_C_DECLS
 
 #endif

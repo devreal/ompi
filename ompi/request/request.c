@@ -34,7 +34,8 @@
 #include "ompi/request/request.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
-#include "opal/class/opal_fifo.h"
+#include "opal/class/opal_list.h"
+#include "opal/threads/thread_usage.h"
 
 opal_pointer_array_t             ompi_request_f_to_c_table = {{0}};
 ompi_predefined_request_t        ompi_request_null = {{{{{0}}}}};
@@ -52,13 +53,17 @@ ompi_request_fns_t               ompi_request_functions = {
     ompi_request_default_wait_some
 };
 
+static uint64_t progress_calls = 0;
+
 
 /**
  * FIFO of completed requests that need the user-defined completion callback
  * invoked. Use atomic push to avoid race conditions if multiple threads
  * complete requests.
  */
-static opal_fifo_t request_complete_fifo;
+static opal_thread_local opal_list_t *request_complete_list = NULL;
+
+static opal_mutex_t request_complete_lock;
 
 /**
  * Flag indicating whether the progress callback has been registered.
@@ -68,7 +73,7 @@ static opal_atomic_int32_t progress_callback_registered;
 /**
  * Progress completed requests whose user-callback are pending.
  */
-static int ompi_request_progress_user_completion();
+int ompi_request_progress_user_completion();
 
 static void ompi_request_construct(ompi_request_t* req)
 {
@@ -199,7 +204,8 @@ int ompi_request_init(void)
 
     progress_callback_registered = 0;
 
-    OBJ_CONSTRUCT(&request_complete_fifo, opal_fifo_t);
+    OBJ_CONSTRUCT(&request_complete_lock, opal_mutex_t);
+    //OBJ_CONSTRUCT(&request_complete_list, opal_list_t);
 
     return OMPI_SUCCESS;
 }
@@ -210,12 +216,16 @@ int ompi_request_finalize(void)
     if (progress_callback_registered) {
         opal_progress_unregister(&ompi_request_progress_user_completion);
     }
-    OBJ_DESTRUCT(&request_complete_fifo);
+    //OBJ_DESTRUCT(&request_complete_list);
+    OBJ_DESTRUCT(&request_complete_lock);
     OMPI_REQUEST_FINI( &ompi_request_null.request );
     OBJ_DESTRUCT( &ompi_request_null.request );
     OMPI_REQUEST_FINI( &ompi_request_empty );
     OBJ_DESTRUCT( &ompi_request_empty );
     OBJ_DESTRUCT( &ompi_request_f_to_c_table );
+
+    printf("completion progress called %lu times\n", progress_calls);
+
     return OMPI_SUCCESS;
 }
 
@@ -242,22 +252,39 @@ int ompi_request_persistent_noop_create(ompi_request_t** request)
     return OMPI_SUCCESS;
 }
 
-static
+// allow multiple threads to progress callbacks concurrently
+// but protect from recursive progressing
+static opal_thread_local int in_progress = 0;
+
+static inline int process_request_cb(ompi_request_t *request)
+{
+    if (request == NULL) return 0;
+    MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
+    void *cb_data = request->user_req_complete_cb_data;
+    request->user_req_complete_cb = NULL;
+    request->user_req_complete_cb_data = NULL;
+    cb(cb_data, request);
+    return 1;
+}
+
 int ompi_request_progress_user_completion()
 {
-    int completed = 0;
+    opal_list_t tmplist;
     ompi_request_t *request;
+    int completed = 0;
+    opal_list_t *rcl = request_complete_list;
+    if (NULL == rcl || opal_list_is_empty(rcl) || in_progress) return 0;
 
-    if (opal_fifo_is_empty(&request_complete_fifo)) return 0;
+    in_progress = 1;
 
-    while (NULL != (request = (ompi_request_t*)opal_fifo_pop(&request_complete_fifo))) {
-        MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
-        void *cb_data = request->user_req_complete_cb_data;
-        request->user_req_complete_cb = NULL;
-        request->user_req_complete_cb_data = NULL;
-        cb(cb_data, request);
+    ++progress_calls;
+    while (NULL != (request = (ompi_request_t*)opal_list_remove_first(rcl))) {
+        process_request_cb(request);
         completed++;
     }
+
+    in_progress = 0;
+
 
     return completed;
 }
@@ -265,10 +292,18 @@ int ompi_request_progress_user_completion()
 void
 ompi_request_enqueue_user_cb(ompi_request_t *request)
 {
-    opal_fifo_push(&request_complete_fifo, &request->super.super);
-    if (!progress_callback_registered) {
-        if (0 == opal_atomic_swap_32(&progress_callback_registered, 1)) {
-            opal_progress_register(ompi_request_progress_user_completion);
+    opal_list_t *rcl = request_complete_list;
+    /* initialize the thread-local instance of the completion list */
+    if (OPAL_UNLIKELY(NULL == rcl)) {
+        rcl = request_complete_list = malloc(sizeof(opal_list_t));
+        OBJ_CONSTRUCT(rcl, opal_list_t);
+        /* Make sure the progress callback is properly registerd */
+        if (OPAL_UNLIKELY(!progress_callback_registered)) {
+            if (0 == opal_atomic_swap_32(&progress_callback_registered, 1)) {
+                opal_progress_register_post(ompi_request_progress_user_completion);
+            }
         }
     }
+    /* append to the thread-local instance of the completion list */
+    opal_list_append(rcl, &request->super.super);
 }
