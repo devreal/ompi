@@ -29,13 +29,12 @@
 
 #include "ompi/communicator/communicator.h"
 #include "opal/class/opal_object.h"
-#include "opal/class/opal_fifo.h"
 #include "opal/sys/atomic.h"
 #include "ompi/request/request.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
-#include "opal/class/opal_list.h"
 #include "opal/threads/thread_usage.h"
+#include "opal/class/opal_fifo.h"
 
 opal_pointer_array_t             ompi_request_f_to_c_table = {{0}};
 ompi_predefined_request_t        ompi_request_null = {{{{{0}}}}};
@@ -61,7 +60,7 @@ static uint64_t progress_calls = 0;
  * invoked. Use atomic push to avoid race conditions if multiple threads
  * complete requests.
  */
-static opal_thread_local opal_list_t *request_complete_list = NULL;
+static opal_fifo_t request_complete_fifo;
 
 static opal_mutex_t request_complete_lock;
 
@@ -205,7 +204,7 @@ int ompi_request_init(void)
     progress_callback_registered = 0;
 
     OBJ_CONSTRUCT(&request_complete_lock, opal_mutex_t);
-    //OBJ_CONSTRUCT(&request_complete_list, opal_list_t);
+    OBJ_CONSTRUCT(&request_complete_fifo, opal_fifo_t);
 
     return OMPI_SUCCESS;
 }
@@ -216,7 +215,7 @@ int ompi_request_finalize(void)
     if (progress_callback_registered) {
         opal_progress_unregister(&ompi_request_progress_user_completion);
     }
-    //OBJ_DESTRUCT(&request_complete_list);
+    OBJ_DESTRUCT(&request_complete_fifo);
     OBJ_DESTRUCT(&request_complete_lock);
     OMPI_REQUEST_FINI( &ompi_request_null.request );
     OBJ_DESTRUCT( &ompi_request_null.request );
@@ -256,32 +255,32 @@ int ompi_request_persistent_noop_create(ompi_request_t** request)
 // but protect from recursive progressing
 static opal_thread_local int in_progress = 0;
 
-static inline int process_request_cb(ompi_request_t *request)
+static inline void process_request_cb(ompi_request_t *request)
 {
-    if (request == NULL) return 0;
     MPIX_Request_complete_fn_t *cb = request->user_req_complete_cb;
     void *cb_data = request->user_req_complete_cb_data;
     request->user_req_complete_cb = NULL;
     request->user_req_complete_cb_data = NULL;
     cb(cb_data, request);
-    return 1;
 }
 
 int ompi_request_progress_user_completion()
 {
-    opal_list_t tmplist;
-    ompi_request_t *request;
     int completed = 0;
-    opal_list_t *rcl = request_complete_list;
-    if (NULL == rcl || opal_list_is_empty(rcl) || in_progress) return 0;
+    if (opal_fifo_is_empty(&request_complete_fifo) || in_progress) return 0;
 
     in_progress = 1;
 
     ++progress_calls;
-    while (NULL != (request = (ompi_request_t*)opal_list_remove_first(rcl))) {
+    do {
+        ompi_request_t *request;
+        OPAL_THREAD_LOCK(&request_complete_lock);
+        request = (ompi_request_t*)opal_fifo_pop_st(&request_complete_fifo);
+        OPAL_THREAD_UNLOCK(&request_complete_lock);
+        if (request == NULL) break;
         process_request_cb(request);
         completed++;
-    }
+    } while (1);
 
     in_progress = 0;
 
@@ -292,18 +291,11 @@ int ompi_request_progress_user_completion()
 void
 ompi_request_enqueue_user_cb(ompi_request_t *request)
 {
-    opal_list_t *rcl = request_complete_list;
-    /* initialize the thread-local instance of the completion list */
-    if (OPAL_UNLIKELY(NULL == rcl)) {
-        rcl = request_complete_list = malloc(sizeof(opal_list_t));
-        OBJ_CONSTRUCT(rcl, opal_list_t);
-        /* Make sure the progress callback is properly registerd */
-        if (OPAL_UNLIKELY(!progress_callback_registered)) {
-            if (0 == opal_atomic_swap_32(&progress_callback_registered, 1)) {
-                opal_progress_register_post(ompi_request_progress_user_completion);
-            }
-        }
+    OPAL_THREAD_LOCK(&request_complete_lock);
+    opal_fifo_push_st(&request_complete_fifo, &request->super.super);
+    if (OPAL_UNLIKELY(!progress_callback_registered)) {
+        opal_progress_register_post(ompi_request_progress_user_completion);
+        progress_callback_registered = true;
     }
-    /* append to the thread-local instance of the completion list */
-    opal_list_append(rcl, &request->super.super);
+    OPAL_THREAD_UNLOCK(&request_complete_lock);
 }

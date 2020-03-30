@@ -56,6 +56,9 @@ OMPI_DECLSPEC OBJ_CLASS_DECLARATION(ompi_request_t);
 
 #include "request_dbg.h"
 
+#define REQ_CB_NONE NULL
+#define REQ_CB_COMPLETE ((void*)1UL)
+
 struct ompi_request_t;
 
 /**
@@ -132,7 +135,7 @@ struct ompi_request_t {
     volatile ompi_request_state_t req_state;    /**< enum indicate state of the request */
     bool req_persistent;                        /**< flag indicating if the this is a persistent request */
     int req_f_to_c_index;                       /**< Index in Fortran <-> C translation array */
-    opal_atomic_lock_t lock;                    /**< Lock used to prevent race-condition when releasing the request */
+    opal_mutex_t lock;                          /**< Lock used to prevent race-condition when releasing the request */
     ompi_request_start_fn_t req_start;          /**< Called by MPI_START and MPI_STARTALL */
     ompi_request_free_fn_t req_free;            /**< Called by free */
     ompi_request_cancel_fn_t req_cancel;        /**< Optional function to cancel the request */
@@ -156,7 +159,7 @@ ompi_request_enqueue_user_cb(ompi_request_t *request);
  * See ompi/communicator/communicator.h comments with struct ompi_communicator_t
  * for full explanation why we chose the following padding construct for predefines.
  */
-#define PREDEFINED_REQUEST_PAD 256
+#define PREDEFINED_REQUEST_PAD 512
 
 #define REQUEST_PENDING        (void *)0L
 #define REQUEST_COMPLETED      (void *)1L
@@ -452,7 +455,7 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
         request->req_complete_cb = NULL;
     }
 
-    opal_atomic_lock(&request->lock);
+    OPAL_THREAD_LOCK(&request->lock);
     if (0 == rc) {
         if( OPAL_LIKELY(with_signal) ) {
             void *_tmp_ptr = REQUEST_PENDING;
@@ -472,7 +475,7 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
         ompi_request_enqueue_user_cb(request);
     }
 
-    opal_atomic_unlock(&request->lock);
+    OPAL_THREAD_UNLOCK(&request->lock);
     return OMPI_SUCCESS;
 }
 
@@ -482,7 +485,7 @@ static inline int ompi_request_register_user_completion_cb(
   void                       *cb_data)
 {
     bool invoke_direct = false;
-    opal_atomic_lock(&request->lock);
+    OPAL_THREAD_LOCK(&request->lock);
     if (REQUEST_COMPLETE(request)) {
         /* the request has been completed already, invoke directly */
         invoke_direct = true;
@@ -490,7 +493,7 @@ static inline int ompi_request_register_user_completion_cb(
         request->user_req_complete_cb = cb;
         request->user_req_complete_cb_data = cb_data;
     }
-    opal_atomic_unlock(&request->lock);
+    OPAL_THREAD_UNLOCK(&request->lock);
 
     if (invoke_direct) {
         cb(cb_data, request);
