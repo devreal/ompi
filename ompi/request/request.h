@@ -179,7 +179,7 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
         (request)->req_persistent = (persistent);               \
         (request)->req_complete_cb  = NULL;                     \
         (request)->req_complete_cb_data = NULL;                 \
-        (request)->user_req_complete_cb  = NULL;                \
+        (request)->user_req_complete_cb  = REQUEST_CB_NONE;     \
         (request)->user_req_complete_status = NULL;             \
     } while (0);
 
