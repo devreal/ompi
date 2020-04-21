@@ -108,6 +108,12 @@ nodist_libmpi_c_pmpi_la_SOURCES = \
         pcomm_remote_size.c \
         pcomm_set_attr.c \
         pcomm_set_info.c \
+        pcontinue.c \
+        pcontinue_try.c \
+        pcontinue_waitall.c \
+        pcontinue_waitsome.c \
+        pcontinueall.c \
+        pcontinueany.c \
         pdist_graph_create.c \
         pdist_graph_create_adjacent.c \
         pdist_graph_neighbors.c \
@@ -299,7 +305,6 @@ nodist_libmpi_c_pmpi_la_SOURCES = \
         prequest_f2c.c \
         prequest_free.c \
         prequest_get_status.c \
-        prequest_on_completion.c \
         pprogress.c \
 	prget.c \
 	prget_accumulate.c \

@@ -40,6 +40,7 @@
 #include "opal/mca/threads/condition.h"
 #include "opal/mca/threads/wait_sync.h"
 #include "ompi/constants.h"
+#include "request_cb.h"
 
 BEGIN_C_DECLS
 
@@ -55,9 +56,6 @@ OMPI_DECLSPEC OBJ_CLASS_DECLARATION(ompi_request_t);
  */
 
 #include "request_dbg.h"
-
-#define REQ_CB_NONE NULL
-#define REQ_CB_COMPLETE ((void*)1UL)
 
 struct ompi_request_t;
 
@@ -135,15 +133,14 @@ struct ompi_request_t {
     volatile ompi_request_state_t req_state;    /**< enum indicate state of the request */
     bool req_persistent;                        /**< flag indicating if the this is a persistent request */
     int req_f_to_c_index;                       /**< Index in Fortran <-> C translation array */
-    opal_mutex_t lock;                          /**< Lock used to prevent race-condition when releasing the request */
     ompi_request_start_fn_t req_start;          /**< Called by MPI_START and MPI_STARTALL */
     ompi_request_free_fn_t req_free;            /**< Called by free */
     ompi_request_cancel_fn_t req_cancel;        /**< Optional function to cancel the request */
     ompi_request_complete_fn_t req_complete_cb; /**< Called when the request is MPI completed */
     void *req_complete_cb_data;
     ompi_mpi_object_t req_mpi_object;           /**< Pointer to MPI object that created this request */
-    MPIX_Request_complete_fn_t *user_req_complete_cb; /**< Optional completion callback provided by the user */
-    void *user_req_complete_cb_data;            /**< Optional completion callback data provided by the user */
+    request_user_callback_t *user_req_complete_cb; /**< Optional completion callback provided by the user */
+    ompi_status_public_t    *user_req_complete_status; /**< The status object to set */
 };
 
 /**
@@ -151,15 +148,12 @@ struct ompi_request_t {
  */
 typedef struct ompi_request_t ompi_request_t;
 
-void
-ompi_request_enqueue_user_cb(ompi_request_t *request);
-
 /**
  * Padded struct to maintain back compatibiltiy.
  * See ompi/communicator/communicator.h comments with struct ompi_communicator_t
  * for full explanation why we chose the following padding construct for predefines.
  */
-#define PREDEFINED_REQUEST_PAD 512
+#define PREDEFINED_REQUEST_PAD 256
 
 #define REQUEST_PENDING        (void *)0L
 #define REQUEST_COMPLETED      (void *)1L
@@ -186,7 +180,7 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
         (request)->req_complete_cb  = NULL;                     \
         (request)->req_complete_cb_data = NULL;                 \
         (request)->user_req_complete_cb  = NULL;                \
-        (request)->user_req_complete_cb_data = NULL;            \
+        (request)->user_req_complete_status = NULL;             \
     } while (0);
 
 
@@ -455,7 +449,6 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
         request->req_complete_cb = NULL;
     }
 
-    OPAL_THREAD_LOCK(&request->lock);
     if (0 == rc) {
         if( OPAL_LIKELY(with_signal) ) {
             void *_tmp_ptr = REQUEST_PENDING;
@@ -471,38 +464,57 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
             request->req_complete = REQUEST_COMPLETED;
     }
 
-    if (NULL != request->user_req_complete_cb) {
-        ompi_request_enqueue_user_cb(request);
+    request_user_callback_t *cb;
+    cb = (request_user_callback_t *)OPAL_ATOMIC_SWAP_PTR(&request->user_req_complete_cb, REQUEST_CB_COMPLETED);
+    if (REQUEST_CB_NONE != cb) {
+        assert(cb != REQUEST_CB_COMPLETED);
+        if (NULL != request->user_req_complete_status) {
+            *request->user_req_complete_status = request->req_status;
+        }
+        ompi_request_user_callback_complete(cb);
+
+        /* release the request object */
+        ompi_request_free(&request);
     }
 
-    OPAL_THREAD_UNLOCK(&request->lock);
     return OMPI_SUCCESS;
 }
 
 static inline int ompi_request_register_user_completion_cb(
-  ompi_request_t             *request,
-  MPIX_Request_complete_fn_t  cb,
-  void                       *cb_data)
+  int                         count,
+  ompi_request_t             *requests[],
+  MPIX_Request_complete_fn_t  fn,
+  void                       *fn_data,
+  ompi_status_public_t        statuses[])
 {
-    bool invoke_direct = false;
-    OPAL_THREAD_LOCK(&request->lock);
-    if (REQUEST_COMPLETE(request)) {
-        /* the request has been completed already, invoke directly */
-        invoke_direct = true;
-    } else {
-        request->user_req_complete_cb = cb;
-        request->user_req_complete_cb_data = cb_data;
-    }
-    OPAL_THREAD_UNLOCK(&request->lock);
+    request_user_callback_t *cb = ompi_request_user_callback_create(count, fn, fn_data);
 
-    if (invoke_direct) {
-        cb(cb_data, request);
+    // set the status field in each request here to avoid memory barriers
+    for (int i = 0; i < count; ++i) {
+        requests[i]->user_req_complete_status = (statuses == MPI_STATUSES_IGNORE)
+                                                ? NULL : &statuses[i];
+    }
+
+    opal_atomic_wmb();
+
+    int32_t num_registered = 0;
+    for (int i = 0; i < count; ++i) {
+        if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->user_req_complete_cb,
+                                                    REQUEST_CB_NONE, cb)) {
+            ++num_registered;
+        }
+    }
+
+    int32_t last_num_active = opal_atomic_sub_fetch_32(&cb->num_active, num_registered);
+
+    if (0 == last_num_active) {
+        // all requests were complete and we were the last to decrement
+        // so invoke directly and clean up
+        ompi_request_user_callback_process(cb);
     }
 
     return OMPI_SUCCESS;
 }
-
-int ompi_request_progress_user_completion();
 
 END_C_DECLS
 

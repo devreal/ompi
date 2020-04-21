@@ -26,6 +26,7 @@ headers += \
         request/grequest.h \
         request/request_default.h \
         request/request.h \
+        request/request_cb.h \
 	request/request_dbg.h
 
 if OMPI_ENABLE_GREQUEST_EXTENSIONS
@@ -36,6 +37,7 @@ endif
 lib@OMPI_LIBMPI_NAME@_la_SOURCES += \
         request/grequest.c \
         request/request.c \
+        request/request_cb.c \
         request/req_test.c \
         request/req_wait.c
 

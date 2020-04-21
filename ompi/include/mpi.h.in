@@ -1711,9 +1711,16 @@ OMPI_DECLSPEC  MPI_Request MPI_Request_f2c(MPI_Fint request);
 OMPI_DECLSPEC  int MPI_Request_free(MPI_Request *request);
 OMPI_DECLSPEC  int MPI_Request_get_status(MPI_Request request, int *flag,
                                           MPI_Status *status);
-typedef int (MPIX_Request_complete_fn_t)(void *user_data, MPI_Request request);
-OMPI_DECLSPEC  int MPIX_Request_on_completion(MPI_Request request, MPIX_Request_complete_fn_t *callback, void *callback_data);
-OMPI_DECLSPEC  int MPIX_Progress(void);
+typedef int (MPIX_Request_complete_fn_t)(void *user_data);
+OMPI_DECLSPEC  int MPIX_Continue(MPI_Request *request, MPIX_Request_complete_fn_t cb,
+                                 void *cb_data, MPI_Status *status);
+OMPI_DECLSPEC  int MPIX_Continueall(int count, MPI_Request request[], MPIX_Request_complete_fn_t cb,
+                                    void *cb_data, MPI_Status status[]);
+OMPI_DECLSPEC  int MPIX_Continueany(int count, MPI_Request request[], MPIX_Request_complete_fn_t cb,
+                                    void *cb_data, MPI_Status status[]);
+OMPI_DECLSPEC  int MPIX_Continue_try(int *ndone, int *nremain);
+OMPI_DECLSPEC  int MPIX_Continue_waitall(int *ndone);
+OMPI_DECLSPEC  int MPIX_Continue_waitsome(int *ndone, int *nremain);
 OMPI_DECLSPEC  int MPI_Rget(void *origin_addr, int origin_count, MPI_Datatype origin_datatype,
                             int target_rank, MPI_Aint target_disp, int target_count, MPI_Datatype target_datatype,
                             MPI_Win win, MPI_Request *request);
@@ -2375,7 +2382,15 @@ OMPI_DECLSPEC  MPI_Request PMPI_Request_f2c(MPI_Fint request);
 OMPI_DECLSPEC  int PMPI_Request_free(MPI_Request *request);
 OMPI_DECLSPEC  int PMPI_Request_get_status(MPI_Request request, int *flag,
                                            MPI_Status *status);
-OMPI_DECLSPEC  int PMPIX_Request_on_completion(MPI_Request request, MPIX_Request_complete_fn_t *callback, void *callback_data);
+OMPI_DECLSPEC  int PMPIX_Continue(MPI_Request *request, MPIX_Request_complete_fn_t cb,
+                                 void *cb_data, MPI_Status *status);
+OMPI_DECLSPEC  int PMPIX_Continueall(int count, MPI_Request request[], MPIX_Request_complete_fn_t cb,
+                                    void *cb_data, MPI_Status status[]);
+OMPI_DECLSPEC  int PMPIX_Continueany(int count, MPI_Request request[], MPIX_Request_complete_fn_t cb,
+                                    void *cb_data, MPI_Status status[]);
+OMPI_DECLSPEC  int PMPIX_Continue_try(int *ndone, int *nremain);
+OMPI_DECLSPEC  int PMPIX_Continue_waitall(int *ndone);
+OMPI_DECLSPEC  int PMPIX_Continue_waitsome(int *ndone, int *nremain);
 OMPI_DECLSPEC  int PMPI_Rget(void *origin_addr, int origin_count, MPI_Datatype origin_datatype,
                              int target_rank, MPI_Aint target_disp, int target_count, MPI_Datatype target_datatype,
                              MPI_Win win, MPI_Request *request);

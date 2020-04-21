@@ -128,6 +128,12 @@ libmpi_c_mpi_la_SOURCES = \
         comm_remote_size.c \
         comm_set_attr.c \
         comm_set_info.c \
+        continue.c \
+        continue_try.c \
+        continue_waitall.c \
+        continue_waitsome.c \
+        continueall.c \
+        continueany.c \
         dist_graph_create.c \
         dist_graph_create_adjacent.c \
         dist_graph_neighbors.c \
@@ -319,7 +325,6 @@ libmpi_c_mpi_la_SOURCES = \
         request_f2c.c \
         request_free.c \
         request_get_status.c \
-        request_on_completion.c \
         progress.c \
 	rget.c \
 	rget_accumulate.c \
