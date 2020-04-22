@@ -65,7 +65,9 @@ int MPIX_Continueany(
     OPAL_CR_ENTER_LIBRARY();
 
     for (int i = 0; i < count; ++i) {
-        rc = ompi_request_register_user_completion_cb(1, &requests[i], cb, cb_data, &statuses[i]);
+        rc = ompi_request_register_user_completion_cb(1, &requests[i], cb, cb_data,
+                                                      MPI_STATUSES_IGNORE == statuses
+                                                      ? MPI_STATUSES_IGNORE : &statuses[i]);
         requests[i] = MPI_REQUEST_NULL;
     }
 

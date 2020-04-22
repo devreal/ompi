@@ -43,7 +43,7 @@ int MPIX_Continue(
     if (MPI_PARAM_CHECK) {
         rc = MPI_SUCCESS;
         OMPI_ERR_INIT_FINALIZE(FUNC_NAME);
-        if (NULL == request || MPI_REQUEST_NULL == *request) {
+        if (NULL == request) {
             rc = MPI_ERR_REQUEST;
         }
         OMPI_ERRHANDLER_CHECK(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
@@ -51,7 +51,11 @@ int MPIX_Continue(
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_register_user_completion_cb(1, request, cb, cb_data, status);
+    rc = ompi_request_register_user_completion_cb(1, request, cb, cb_data,
+                                                  MPI_STATUS_IGNORE == status
+                                                  ? MPI_STATUSES_IGNORE : status);
+
+    *request = MPI_REQUEST_NULL;
 
     OMPI_ERRHANDLER_RETURN(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
 }

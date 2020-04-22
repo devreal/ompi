@@ -491,21 +491,26 @@ static inline int ompi_request_register_user_completion_cb(
 
     // set the status field in each request here to avoid memory barriers
     for (int i = 0; i < count; ++i) {
-        requests[i]->user_req_complete_status = (statuses == MPI_STATUSES_IGNORE)
-                                                ? NULL : &statuses[i];
+        if (MPI_REQUEST_NULL != requests[i]) {
+            requests[i]->user_req_complete_status = (MPI_STATUSES_IGNORE == statuses)
+                                                    ? NULL : &statuses[i];
+        }
     }
 
     opal_atomic_wmb();
 
     int32_t num_registered = 0;
     for (int i = 0; i < count; ++i) {
-        if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->user_req_complete_cb,
-                                                    REQUEST_CB_NONE, cb)) {
-            ++num_registered;
+        if (MPI_REQUEST_NULL != requests[i]) {
+            const void *cb_none = REQUEST_CB_NONE;
+            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->user_req_complete_cb,
+                                                        &cb_none, cb)) {
+                ++num_registered;
+            }
         }
     }
 
-    int32_t last_num_active = opal_atomic_sub_fetch_32(&cb->num_active, num_registered);
+    int32_t last_num_active = opal_atomic_sub_fetch_32(&cb->num_active, count - num_registered);
 
     if (0 == last_num_active) {
         // all requests were complete and we were the last to decrement
