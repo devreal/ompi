@@ -464,6 +464,7 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
             request->req_complete = REQUEST_COMPLETED;
     }
 
+
     request_user_callback_t *cb;
     cb = (request_user_callback_t *)OPAL_ATOMIC_SWAP_PTR(&request->user_req_complete_cb, REQUEST_CB_COMPLETED);
     if (REQUEST_CB_NONE != cb) {
@@ -490,10 +491,11 @@ static inline int ompi_request_register_user_completion_cb(
     request_user_callback_t *cb = ompi_request_user_callback_create(count, fn, fn_data);
 
     // set the status field in each request here to avoid memory barriers
-    for (int i = 0; i < count; ++i) {
-        if (MPI_REQUEST_NULL != requests[i]) {
-            requests[i]->user_req_complete_status = (MPI_STATUSES_IGNORE == statuses)
-                                                    ? NULL : &statuses[i];
+    if (MPI_STATUSES_IGNORE != statuses) {
+        for (int i = 0; i < count; ++i) {
+            if (MPI_REQUEST_NULL != requests[i]) {
+                requests[i]->user_req_complete_status = &statuses[i];
+            }
         }
     }
 
