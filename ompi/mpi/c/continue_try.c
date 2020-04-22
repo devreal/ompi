@@ -44,17 +44,22 @@ int MPIX_Continue_try(int *ndone, int *nremain)
 
     OPAL_CR_ENTER_LIBRARY();
 
-    uint64_t num_processed_entry = ompi_request_user_callback_num_processed();
+    if (0 < ompi_request_user_callback_num_active()) {
+        uint64_t num_processed_entry = ompi_request_user_callback_num_processed();
 
-    /* calling opal_progress once is sufficient here */
-    opal_progress();
+        /* calling opal_progress once is sufficient here */
+        opal_progress();
 
-    uint64_t num_processed_exit = ompi_request_user_callback_num_processed();
+        uint64_t num_processed_exit = ompi_request_user_callback_num_processed();
 
-    // TODO: handle overflow gracefully
-    *ndone = num_processed_exit - num_processed_entry;
+        // TODO: handle overflow gracefully
+        *ndone = num_processed_exit - num_processed_entry;
 
-    *nremain = ompi_request_user_callback_num_active();
+        *nremain = ompi_request_user_callback_num_active();
+    } else {
+        *nremain = 0;
+        *ndone   = 0;
+    }
 
     OMPI_ERRHANDLER_RETURN(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
 }
