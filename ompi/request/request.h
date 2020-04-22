@@ -502,10 +502,14 @@ static inline int ompi_request_register_user_completion_cb(
     int32_t num_registered = 0;
     for (int i = 0; i < count; ++i) {
         if (MPI_REQUEST_NULL != requests[i]) {
-            const void *cb_none = REQUEST_CB_NONE;
-            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->user_req_complete_cb,
-                                                        &cb_none, cb)) {
+            ompi_request_t *request = requests[i];
+            void *cb_compare = REQUEST_CB_NONE;
+            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&request->user_req_complete_cb,
+                                                        &cb_compare, cb)) {
                 ++num_registered;
+            } else if (cb_compare == REQUEST_CB_COMPLETED) {
+                /* the request is complete, release the request object */
+                ompi_request_free(&request);
             }
         }
     }
