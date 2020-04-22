@@ -21,14 +21,14 @@
 
 #if OMPI_BUILD_MPI_PROFILING
 #if OPAL_HAVE_WEAK_SYMBOLS
-#pragma weak MPIX_Request_on_completion = PMPIX_Request_on_completion
+#pragma weak MPIX_Continue = PMPIX_Continue
 #endif
-#define MPIX_Request_on_completion PMPIX_Request_on_completion
+#define MPIX_Continue PMPIX_Continue
 #endif
 
-static const char FUNC_NAME[] = "MPIX_Request_on_completion";
+static const char FUNC_NAME[] = "MPIX_Continue";
 
-int MPIX_Request_on_completion(
+int MPIX_Continue(
     MPI_Request *request,
     MPIX_Request_complete_fn_t cb,
     void *cb_data,
