@@ -386,7 +386,6 @@ static inline int ompi_request_cancel(ompi_request_t* request)
  */
 static inline int ompi_request_free(ompi_request_t** request)
 {
-    //assert((*request)->user_req_complete_cb == NULL);
     return (*request)->req_free(request);
 }
 
@@ -457,11 +456,13 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
                 ompi_wait_sync_t *tmp_sync = (ompi_wait_sync_t *) OPAL_ATOMIC_SWAP_PTR(&request->req_complete,
                                                                                        REQUEST_COMPLETED);
                 /* In the case where another thread concurrently changed the request to REQUEST_PENDING */
-                if( REQUEST_PENDING != tmp_sync )
+                if( REQUEST_PENDING != tmp_sync ) {
                     wait_sync_update(tmp_sync, 1, request->req_status.MPI_ERROR);
+                }
             }
-        } else
+        } else {
             request->req_complete = REQUEST_COMPLETED;
+        }
     }
 
 
