@@ -81,5 +81,6 @@ int MPI_Irecv(void *buf, int count, MPI_Datatype type, int source,
         memchecker_call(&opal_memchecker_base_mem_noaccess, buf, count, type);
     );
     rc = MCA_PML_CALL(irecv(buf,count,type,source,tag,comm,request));
+    ompi_request_progress_user_completion();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }

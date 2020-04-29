@@ -49,7 +49,7 @@ static opal_thread_local uint64_t request_callback_num_processed = 0;
 /**
  * Progress completed requests whose user-callback are pending.
  */
-static int ompi_request_progress_user_completion();
+int ompi_request_progress_user_completion();
 
 static void ompi_request_user_callback_construct(request_user_callback_t* cb)
 {
@@ -103,7 +103,7 @@ int ompi_request_user_callback_finalize(void)
     return OMPI_SUCCESS;
 }
 
-static int ompi_request_progress_user_completion()
+int ompi_request_progress_user_completion()
 {
     int completed = 0;
     if (opal_fifo_is_empty(&request_callback_fifo) || in_progress) return 0;

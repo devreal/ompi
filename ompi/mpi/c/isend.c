@@ -94,6 +94,7 @@ int MPI_Isend(const void *buf, int count, MPI_Datatype type, int dest,
      
     rc = MCA_PML_CALL(isend(buf, count, type, dest, tag,
                             MCA_PML_BASE_SEND_STANDARD, comm, request));
+    ompi_request_progress_user_completion();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }
 

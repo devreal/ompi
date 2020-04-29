@@ -80,5 +80,6 @@ int MPI_Recv(void *buf, int count, MPI_Datatype type, int source,
     OPAL_CR_ENTER_LIBRARY();
 
     rc = MCA_PML_CALL(recv(buf, count, type, source, tag, comm, status));
+    ompi_request_progress_user_completion();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }

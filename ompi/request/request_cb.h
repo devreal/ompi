@@ -77,6 +77,7 @@ void ompi_request_user_callback_complete(request_user_callback_t *cb)
     }
 }
 
+int ompi_request_progress_user_completion();
 
 /**
  * Create and initialize a callback object.
