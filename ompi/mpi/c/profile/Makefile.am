@@ -109,11 +109,8 @@ nodist_libmpi_c_pmpi_la_SOURCES = \
         pcomm_set_attr.c \
         pcomm_set_info.c \
         pcontinue.c \
-        pcontinue_try.c \
-        pcontinue_waitall.c \
-        pcontinue_waitsome.c \
+        pcontinue_init.c \
         pcontinueall.c \
-        pcontinueany.c \
         pdist_graph_create.c \
         pdist_graph_create_adjacent.c \
         pdist_graph_neighbors.c \

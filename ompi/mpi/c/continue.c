@@ -30,9 +30,9 @@ static const char FUNC_NAME[] = "MPIX_Continue";
 
 int MPIX_Continue(
     MPI_Request *request,
-    MPIX_Request_complete_fn_t cb,
     void *cb_data,
-    MPI_Status *status)
+    MPI_Status *status,
+    MPI_Request cont_req)
 {
     int rc;
 
@@ -46,16 +46,17 @@ int MPIX_Continue(
         if (NULL == request) {
             rc = MPI_ERR_REQUEST;
         }
+        if (MPI_REQUEST_NULL == cont_req || OMPI_REQUEST_CONT != cont_req->req_type) {
+            rc = MPI_ERR_REQUEST;
+        }
         OMPI_ERRHANDLER_CHECK(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
     }
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_register_user_completion_cb(1, request, cb, cb_data,
-                                                  MPI_STATUS_IGNORE == status
-                                                  ? MPI_STATUSES_IGNORE : status);
-
-    *request = MPI_REQUEST_NULL;
+    rc = ompi_request_cont_register(cont_req, 1, request, cb_data,
+                                    MPI_STATUS_IGNORE == status
+                                    ? MPI_STATUSES_IGNORE : status);
 
     OMPI_ERRHANDLER_RETURN(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
 }

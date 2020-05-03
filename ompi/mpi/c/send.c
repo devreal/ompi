@@ -79,6 +79,5 @@ int MPI_Send(const void *buf, int count, MPI_Datatype type, int dest,
 
     OPAL_CR_ENTER_LIBRARY();
     rc = MCA_PML_CALL(send(buf, count, type, dest, tag, MCA_PML_BASE_SEND_STANDARD, comm));
-    ompi_request_progress_user_completion();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }

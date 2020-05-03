@@ -91,10 +91,10 @@ int MPI_Isend(const void *buf, int count, MPI_Datatype type, int dest,
      * order to trap end user errors. Unfortunatly valgrind does not support marking buffers as read-only,
      * so there is pretty much nothing we can do here.
      */
-     
+
     rc = MCA_PML_CALL(isend(buf, count, type, dest, tag,
                             MCA_PML_BASE_SEND_STANDARD, comm, request));
-    ompi_request_progress_user_completion();
+    ompi_request_cont_progress_ready();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }
 

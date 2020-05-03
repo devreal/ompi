@@ -31,9 +31,9 @@ static const char FUNC_NAME[] = "MPIX_Continueall";
 int MPIX_Continueall(
     int count,
     MPI_Request requests[],
-    MPIX_Request_complete_fn_t cb,
-    void *cb_data,
-    MPI_Status statuses[])
+    void *cont_data,
+    MPI_Status statuses[],
+    MPI_Request cont_req)
 {
     int rc;
 
@@ -47,7 +47,7 @@ int MPIX_Continueall(
     if (MPI_PARAM_CHECK) {
         rc = MPI_SUCCESS;
         OMPI_ERR_INIT_FINALIZE(FUNC_NAME);
-        if (NULL == requests) {
+        if (MPI_REQUEST_NULL == cont_req || OMPI_REQUEST_CONT != cont_req->req_type) {
             rc = MPI_ERR_REQUEST;
         }
         if( (NULL == requests) && (0 != count) ) {
@@ -65,11 +65,7 @@ int MPIX_Continueall(
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_register_user_completion_cb(count, requests, cb, cb_data, statuses);
-
-    for (int i = 0; i < count; ++i) {
-        requests[i] = MPI_REQUEST_NULL;
-    }
+    rc = ompi_request_cont_register(cont_req, count, requests, cont_data, statuses);
 
     OMPI_ERRHANDLER_RETURN(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
 }

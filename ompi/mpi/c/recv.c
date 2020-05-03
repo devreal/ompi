@@ -26,7 +26,6 @@
 #include "ompi/errhandler/errhandler.h"
 #include "ompi/mca/pml/pml.h"
 #include "ompi/memchecker.h"
-#include "ompi/request/request.h"
 #include "ompi/runtime/ompi_spc.h"
 
 #if OMPI_BUILD_MPI_PROFILING
@@ -80,6 +79,5 @@ int MPI_Recv(void *buf, int count, MPI_Datatype type, int source,
     OPAL_CR_ENTER_LIBRARY();
 
     rc = MCA_PML_CALL(recv(buf, count, type, source, tag, comm, status));
-    ompi_request_progress_user_completion();
     OMPI_ERRHANDLER_RETURN(rc, comm, rc, FUNC_NAME);
 }

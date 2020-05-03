@@ -20,126 +20,66 @@
 
 BEGIN_C_DECLS
 
-#define REQUEST_CB_NONE (NULL)
-#define REQUEST_CB_COMPLETED (request_user_callback_t*)(-1ULL)
+/**
+ * Request continuation pointer states
+ */
+#define REQUEST_CONT_NONE (NULL)
+#define REQUEST_CONT_COMPLETED (ompi_request_cont_t*)(-1ULL)
+
+/**
+ * Forward declaration
+ */
+typedef struct ompi_request_t ompi_request_t;
 
 /**
  * Request callback class
  */
-OMPI_DECLSPEC OBJ_CLASS_DECLARATION(request_user_callback_t);
+OMPI_DECLSPEC OBJ_CLASS_DECLARATION(ompi_request_cont_t);
 
-struct request_user_callback_t;
-
-struct request_user_callback_t {
+struct ompi_request_cont_t {
     opal_free_list_item_t super;      /**< Base type */
-    MPIX_Request_complete_fn_t *fn;   /**< Optional completion callback provided by the user */
-    void *fn_data;                    /**< Optional completion callback data provided by the user */
-    opal_atomic_int32_t num_active;   /**< The number of active requests on this callback */
+    ompi_request_t *cont_req;         /**< The continuation request this continuation is registered with */
+    void *cont_data;                  /**< Continuation state provided by the user */
+    opal_atomic_int32_t num_active;   /**< The number of active operation requests on this callback */
 };
 
-
-typedef struct request_user_callback_t request_user_callback_t;
-
-/* freelist of callback objects */
-OMPI_DECLSPEC extern opal_free_list_t request_callback_freelist;
-
-/* the number of unfinished callbacks */
-OMPI_DECLSPEC extern opal_atomic_int32_t num_active_callbacks;
+/* Convenience typedef */
+typedef struct ompi_request_cont_t ompi_request_cont_t;
 
 /**
  * Initialize the user-callback infrastructure.
  */
-int ompi_request_user_callback_init(void);
+int ompi_request_cont_init(void);
 
 /**
  * Finalize the user-callback infrastructure.
  */
-int ompi_request_user_callback_finalize(void);
-
-
-/**
- * Enqueue the callback for later processing.
- */
-void ompi_request_user_callback_enqueue(request_user_callback_t *cb);
+int ompi_request_cont_finalize(void);
 
 /**
- * Notify the user callback that the request is complete, potentially
- * enqueueing the callback for later processing.
+ * Notify the continuation that the request is complete, potentially
+ * enqueueing the callback for later invocation.
  */
-static inline
-void ompi_request_user_callback_complete(request_user_callback_t *cb)
-{
-    int32_t num_active = opal_atomic_sub_fetch_32(&cb->num_active, 1);
-    assert(num_active >= 0);
-    if (0 == num_active) {
-        // we were the last to deregister so enqueue for later processing
-        ompi_request_user_callback_enqueue(cb);
-    }
-}
+void ompi_request_cont_complete_req(ompi_request_cont_t *cb);
 
-int ompi_request_progress_user_completion();
-
-/**
- * Create and initialize a callback object.
- */
-static inline
-request_user_callback_t *ompi_request_user_callback_create(
+int ompi_request_cont_register(
+  ompi_request_t             *cont_req,
   int                         count,
-  MPIX_Request_complete_fn_t  fn,
-  void                       *fn_data)
-{
-    request_user_callback_t *cb;
-    cb = (request_user_callback_t *)opal_free_list_get(&request_callback_freelist);
-    cb->fn = fn;
-    cb->fn_data = fn_data;
-    cb->num_active = count;
-
-    OPAL_THREAD_FETCH_ADD32(&num_active_callbacks, 1);
-
-    return cb;
-}
+  ompi_request_t             *requests[],
+  void                       *cont_data,
+  ompi_status_public_t        statuses[]);
 
 
 /**
- * Process a callback. Returns the callback object to the freelist.
+ * Allocate a new (presistent & transient) continuation request.
  */
-static inline
-void ompi_request_user_callback_process(request_user_callback_t *cb)
-{
-    MPIX_Request_complete_fn_t *fn = cb->fn;
-    void *fn_data = cb->fn_data;
-    cb->fn      = NULL;
-    cb->fn_data = NULL;
-    fn(fn_data);
-
-    opal_free_list_return(&request_callback_freelist, &cb->super);
-
-    OPAL_THREAD_FETCH_ADD32(&num_active_callbacks, -1);
-
-    assert(num_active_callbacks >= 0);
-}
+int ompi_request_cont_allocate_cont_req(MPIX_Continue_cb_t *fn, ompi_request_t **cont_req);
 
 
 /**
- * Wait for all active callbacks to complete.
+ * Progress completed requests whose user-callback are pending.
  */
-int ompi_request_user_callback_wait(void);
-
-/**
- * Return the number of active request callbacks.
- */
-static inline
-int ompi_request_user_callback_num_active(void)
-{
-  return num_active_callbacks;
-}
-
-
-/**
- * Return the number of active request callbacks by the current thread (thread-specific).
- */
-uint64_t ompi_request_user_callback_num_processed(void);
-
+int ompi_request_cont_progress_ready();
 
 END_C_DECLS
 

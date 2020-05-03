@@ -129,11 +129,8 @@ libmpi_c_mpi_la_SOURCES = \
         comm_set_attr.c \
         comm_set_info.c \
         continue.c \
-        continue_try.c \
-        continue_waitall.c \
-        continue_waitsome.c \
+        continue_init.c \
         continueall.c \
-        continueany.c \
         dist_graph_create.c \
         dist_graph_create_adjacent.c \
         dist_graph_neighbors.c \

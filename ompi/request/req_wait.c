@@ -57,7 +57,11 @@ int ompi_request_default_wait(
         status->_ucount    = req->req_status._ucount;
         status->_cancelled = req->req_status._cancelled;
     }
-    if( req->req_persistent ) {
+
+    if (req->req_transient) {
+        /* nothing to do here */
+        return MPI_SUCCESS;
+    } else if( req->req_persistent ) {
         if( req->req_state == OMPI_REQUEST_INACTIVE ) {
             if (MPI_STATUS_IGNORE != status) {
                 *status = ompi_status_empty;
@@ -113,7 +117,7 @@ int ompi_request_default_wait_any(size_t count,
         }
 
         if( !OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&request->req_complete, &_tmp_ptr, &sync) ) {
-            assert(REQUEST_COMPLETE(request));
+            assert(request->req_transient || REQUEST_COMPLETE(request));
             completed = i;
             *index = i;
             goto after_sync_wait;
@@ -158,13 +162,13 @@ int ompi_request_default_wait_any(size_t count,
     if( *index == (int)completed ) {
         /* Only one request has triggered. There was no in-flight
          * completions. Drop the signalled flag so we won't block
-         * in WAIT_SYNC_RELEASE 
+         * in WAIT_SYNC_RELEASE
          */
         WAIT_SYNC_SIGNALLED(&sync);
     }
 
     request = requests[*index];
-    assert( REQUEST_COMPLETE(request) );
+    assert( request->req_transient || REQUEST_COMPLETE(request) );
 #if OPAL_ENABLE_FT_CR == 1
     if( opal_cr_is_enabled ) {
         OMPI_CRCP_REQUEST_COMPLETE(request);
@@ -183,7 +187,10 @@ int ompi_request_default_wait_any(size_t count,
         status->MPI_ERROR = old_error;
     }
     rc = request->req_status.MPI_ERROR;
-    if( request->req_persistent ) {
+
+    if (request->req_transient) {
+        /* nothing to do here */
+    } else if( request->req_persistent ) {
         request->req_state = OMPI_REQUEST_INACTIVE;
     } else if (MPI_SUCCESS == rc) {
         /* Only free the request if there is no error on it */
@@ -280,7 +287,6 @@ int ompi_request_default_wait_all( size_t count,
                     continue;
                 }
             }
-            assert( REQUEST_COMPLETE(request) );
 
             if( opal_cr_is_enabled) {
                 OMPI_CRCP_REQUEST_COMPLETE(request);
@@ -291,6 +297,13 @@ int ompi_request_default_wait_all( size_t count,
             }
 
             statuses[i] = request->req_status;
+
+            if (request->req_transient) {
+                /* nothing else to do here */
+                continue;
+            }
+
+            assert( REQUEST_COMPLETE(request) );
 
             if( request->req_persistent ) {
                 request->req_state = OMPI_REQUEST_INACTIVE;
@@ -341,7 +354,6 @@ int ompi_request_default_wait_all( size_t count,
                     goto absorb_error_and_continue;
                  }
             }
-            assert( REQUEST_COMPLETE(request) );
 
             if( opal_cr_is_enabled) {
                 OMPI_CRCP_REQUEST_COMPLETE(request);
@@ -354,6 +366,13 @@ int ompi_request_default_wait_all( size_t count,
             }
 
             rc = request->req_status.MPI_ERROR;
+
+            if (request->req_transient) {
+                /* nothing else to do here */
+                continue;
+            }
+
+            assert( REQUEST_COMPLETE(request) );
 
             if( request->req_persistent ) {
                 request->req_state = OMPI_REQUEST_INACTIVE;
@@ -423,7 +442,7 @@ int ompi_request_default_wait_some(size_t count,
         indices[num_active_reqs] = OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&request->req_complete, &_tmp_ptr, &sync);
         if( !indices[num_active_reqs] ) {
             /* If the request is completed go ahead and mark it as such */
-            assert( REQUEST_COMPLETE(request) );
+            assert( request->req_transient || REQUEST_COMPLETE(request) );
             num_requests_done++;
         }
         num_active_reqs++;
@@ -460,14 +479,14 @@ int ompi_request_default_wait_some(size_t count,
          * a) request was found completed in the first loop
          *    => ( indices[i] == 0 )
          * b) request was completed between first loop and this check
-         *    => ( indices[i] == 1 ) and we can NOT atomically mark the 
+         *    => ( indices[i] == 1 ) and we can NOT atomically mark the
          *    request as pending.
          * c) request wasn't finished yet
-         *    => ( indices[i] == 1 ) and we CAN  atomically mark the 
+         *    => ( indices[i] == 1 ) and we CAN  atomically mark the
          *    request as pending.
          * NOTE that in any case (i >= num_requests_done) as latter grows
          * either slowly (in case of partial completion)
-         * OR in parallel with `i` (in case of full set completion)  
+         * OR in parallel with `i` (in case of full set completion)
          */
         if( !indices[num_active_reqs] ) {
             indices[num_requests_done++] = i;
@@ -491,7 +510,7 @@ int ompi_request_default_wait_some(size_t count,
 
     for (size_t i = 0; i < num_requests_done; i++) {
         request = requests[indices[i]];
-        assert( REQUEST_COMPLETE(request) );
+        assert( request->req_transient || REQUEST_COMPLETE(request) );
 
 #if OPAL_ENABLE_FT_CR == 1
         if( opal_cr_is_enabled) {
@@ -512,7 +531,9 @@ int ompi_request_default_wait_some(size_t count,
             rc = MPI_ERR_IN_STATUS;
         }
 
-        if( request->req_persistent ) {
+        if (request->req_transient) {
+            /* nothing else to do here */
+        } else if( request->req_persistent ) {
             request->req_state = OMPI_REQUEST_INACTIVE;
         } else {
             /* Only free the request if there was no error */

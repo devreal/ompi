@@ -31,6 +31,7 @@
 #include "opal/class/opal_object.h"
 #include "opal/sys/atomic.h"
 #include "ompi/request/request.h"
+#include "ompi/request/request_cb.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
 #include "opal/threads/thread_usage.h"
@@ -65,8 +66,10 @@ static void ompi_request_construct(ompi_request_t* req)
     req->req_complete_cb_data = NULL;
     req->req_f_to_c_index = MPI_UNDEFINED;
     req->req_mpi_object.comm = (struct ompi_communicator_t*) NULL;
-    req->user_req_complete_cb = NULL;
-    req->user_req_complete_status = NULL;
+    req->cont_obj         = NULL;
+    req->cont_status      = NULL;
+    req->cont_cb          = NULL;
+    req->cont_num_active  = 0;
 }
 
 static void ompi_request_destruct(ompi_request_t* req)
@@ -177,7 +180,7 @@ int ompi_request_init(void)
     ompi_status_empty._ucount = 0;
     ompi_status_empty._cancelled = 0;
 
-    return ompi_request_user_callback_init();
+    return ompi_request_cont_init();
 }
 
 
@@ -189,7 +192,7 @@ int ompi_request_finalize(void)
     OBJ_DESTRUCT( &ompi_request_empty );
     OBJ_DESTRUCT( &ompi_request_f_to_c_table );
 
-    return ompi_request_user_callback_finalize();
+    return ompi_request_cont_finalize();
 }
 
 
