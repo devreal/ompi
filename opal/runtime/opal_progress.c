@@ -148,7 +148,8 @@ opal_progress_init(void)
     }
 #endif
 
-    callbacks_size = callbacks_lp_size = callbacks_post_size = 8;
+    callbacks_size = callbacks_lp_size = 8;
+    callbacks_post_size = 1;
 
     callbacks = malloc (callbacks_size * sizeof (callbacks[0]));
     callbacks_lp = malloc (callbacks_lp_size * sizeof (callbacks_lp[0]));
@@ -275,7 +276,7 @@ opal_progress(void)
         events += (callbacks_post[i])();
     }
 
-    // TODO: there seems to be a bug in OMPI where some 
+    // TODO: there seems to be a bug in OMPI where some
     //       processes yield even though they are not supposed to.
     //       Investigate that!
     //       The bug occurs with NPN>1 and only on one (the first?) node!
