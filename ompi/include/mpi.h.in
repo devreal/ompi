@@ -1711,11 +1711,11 @@ OMPI_DECLSPEC  MPI_Request MPI_Request_f2c(MPI_Fint request);
 OMPI_DECLSPEC  int MPI_Request_free(MPI_Request *request);
 OMPI_DECLSPEC  int MPI_Request_get_status(MPI_Request request, int *flag,
                                           MPI_Status *status);
-typedef int (MPIX_Continue_cb_t)(void *user_data);
-OMPI_DECLSPEC  int MPIX_Continue_init(MPIX_Continue_cb_t *cb, MPI_Request *cont_req);
-OMPI_DECLSPEC  int MPIX_Continue(MPI_Request *request, void *cb_data,
+typedef int (MPI_Continue_cb_t)(void *user_data);
+OMPI_DECLSPEC  int MPI_Continue_init(MPI_Continue_cb_t *cb, MPI_Request *cont_req);
+OMPI_DECLSPEC  int MPI_Continue(MPI_Request *request, int *flag, void *cb_data,
                                  MPI_Status *status, MPI_Request cont_req);
-OMPI_DECLSPEC  int MPIX_Continueall(int count, MPI_Request request[], void *cb_data,
+OMPI_DECLSPEC  int MPI_Continueall(int count, MPI_Request request[], int *flag, void *cb_data,
                                     MPI_Status status[], MPI_Request cont_req);
 OMPI_DECLSPEC  int MPI_Rget(void *origin_addr, int origin_count, MPI_Datatype origin_datatype,
                             int target_rank, MPI_Aint target_disp, int target_count, MPI_Datatype target_datatype,
@@ -2378,10 +2378,10 @@ OMPI_DECLSPEC  MPI_Request PMPI_Request_f2c(MPI_Fint request);
 OMPI_DECLSPEC  int PMPI_Request_free(MPI_Request *request);
 OMPI_DECLSPEC  int PMPI_Request_get_status(MPI_Request request, int *flag,
                                            MPI_Status *status);
-OMPI_DECLSPEC  int PMPIX_Continue_init(MPIX_Continue_cb_t *cb, MPI_Request *cont_req);
-OMPI_DECLSPEC  int PMPIX_Continue(MPI_Request *request, void *cb_data,
+OMPI_DECLSPEC  int PMPI_Continue_init(MPI_Continue_cb_t *cb, MPI_Request *cont_req);
+OMPI_DECLSPEC  int PMPI_Continue(MPI_Request *request, int *flag, void *cb_data,
                                   MPI_Status *status, MPI_Request cont_req);
-OMPI_DECLSPEC  int PMPIX_Continueall(int count, MPI_Request request[], void *cb_data,
+OMPI_DECLSPEC  int PMPI_Continueall(int count, MPI_Request request[], int *flag, void *cb_data,
                                      MPI_Status status[], MPI_Request cont_req);
 OMPI_DECLSPEC  int PMPI_Rget(void *origin_addr, int origin_count, MPI_Datatype origin_datatype,
                              int target_rank, MPI_Aint target_disp, int target_count, MPI_Datatype target_datatype,

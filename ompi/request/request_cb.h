@@ -62,18 +62,24 @@ int ompi_request_cont_finalize(void);
  */
 void ompi_request_cont_complete_req(ompi_request_cont_t *cb);
 
+/**
+ * Register a continuation for a set of operations represented by \c requests.
+ * If all operations have completed already the continuation will not be registered
+ * and \c all_complete will be set to 1.
+ */
 int ompi_request_cont_register(
   ompi_request_t             *cont_req,
   int                         count,
   ompi_request_t             *requests[],
   void                       *cont_data,
+  bool                       *all_complete,
   ompi_status_public_t        statuses[]);
 
 
 /**
  * Allocate a new (presistent & transient) continuation request.
  */
-int ompi_request_cont_allocate_cont_req(MPIX_Continue_cb_t *fn, ompi_request_t **cont_req);
+int ompi_request_cont_allocate_cont_req(MPI_Continue_cb_t *fn, ompi_request_t **cont_req);
 
 
 /**

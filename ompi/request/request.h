@@ -142,8 +142,9 @@ struct ompi_request_t {
     ompi_mpi_object_t req_mpi_object;           /**< Pointer to MPI object that created this request */
     ompi_request_cont_t  *cont_obj;             /**< User-defined continuation state */
     ompi_status_public_t *cont_status;          /**< The status object to set before invoking continuation */
-    MPIX_Continue_cb_t   *cont_cb;              /**< The callback registered for a continuation request */
+    MPI_Continue_cb_t    *cont_cb;              /**< The callback registered for a continuation request */
     opal_atomic_int32_t   cont_num_active;      /**< The number of active continuations registered with a continuation request */
+    opal_atomic_lock_t    cont_lock;            /**< Lock used for continuation requests */
 };
 
 /**
@@ -189,9 +190,8 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
     } while (0);
 
 
-#define REQUEST_COMPLETE(req)        (REQUEST_COMPLETED == (req)->req_complete || \
-                                      (OMPI_REQUEST_CONT == (req)->req_type &&    \
-                                       0 == (req)->cont_num_active))
+#define REQUEST_COMPLETE(req)        (REQUEST_COMPLETED == (req)->req_complete)
+
 /**
  * Finalize a request.  This is a macro to avoid function call
  * overhead, since this is typically invoked in the critical
@@ -406,22 +406,11 @@ static inline int ompi_request_free(ompi_request_t** request)
 #define ompi_request_wait_some  (ompi_request_functions.req_wait_some)
 
 
-static inline void ompi_request_wait_cont_completion(ompi_request_t *req)
-{
-    /* TODO: can we do better here? */
-    while(0 < req->cont_num_active) {
-        opal_progress();
-    }
-}
-
 /**
  * Wait a particular request for completion
  */
 static inline void ompi_request_wait_completion(ompi_request_t *req)
 {
-    if (OMPI_REQUEST_CONT == req->req_type) {
-        return ompi_request_wait_cont_completion(req);
-    }
     if (opal_using_threads () && !REQUEST_COMPLETE(req)) {
         void *_tmp_ptr = REQUEST_PENDING;
         ompi_wait_sync_t sync;
@@ -483,10 +472,11 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
         }
     }
 
-
+    /* regular (non-transient) requests */
     ompi_request_cont_t *cb;
     cb = (ompi_request_cont_t *)OPAL_ATOMIC_SWAP_PTR(&request->cont_obj, REQUEST_CONT_COMPLETED);
     if (REQUEST_CONT_NONE != cb) {
+        /* this assert may trigger if we complete a continuation request while another thread attempts to revive it */
         assert(cb != REQUEST_CONT_COMPLETED);
         if (NULL != request->cont_status) {
             *request->cont_status = request->req_status;
@@ -499,7 +489,8 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
             request->req_state = OMPI_REQUEST_INACTIVE;
         } else {
             /* the request is complete, release the request object */
-            ompi_request_free(&request);
+            ompi_request_t *_request = request;
+            ompi_request_free(&_request);
         }
 
         ompi_request_cont_complete_req(cb);

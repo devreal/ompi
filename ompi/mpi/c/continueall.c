@@ -21,21 +21,23 @@
 
 #if OMPI_BUILD_MPI_PROFILING
 #if OPAL_HAVE_WEAK_SYMBOLS
-#pragma weak MPIX_Continueall = PMPIX_Continueall
+#pragma weak MPI_Continueall = PMPI_Continueall
 #endif
-#define MPIX_Continueall PMPIX_Continueall
+#define MPI_Continueall PMPI_Continueall
 #endif
 
-static const char FUNC_NAME[] = "MPIX_Continueall";
+static const char FUNC_NAME[] = "MPI_Continueall";
 
-int MPIX_Continueall(
-    int count,
-    MPI_Request requests[],
-    void *cont_data,
-    MPI_Status statuses[],
-    MPI_Request cont_req)
+int MPI_Continueall(
+    int          count,
+    MPI_Request  requests[],
+    int         *flag,
+    void        *cont_data,
+    MPI_Status   statuses[],
+    MPI_Request  cont_req)
 {
     int rc;
+    bool all_complete = false;
 
     MEMCHECKER(
         for (int j = 0; j < count; j++){
@@ -49,6 +51,9 @@ int MPIX_Continueall(
         OMPI_ERR_INIT_FINALIZE(FUNC_NAME);
         if (MPI_REQUEST_NULL == cont_req || OMPI_REQUEST_CONT != cont_req->req_type) {
             rc = MPI_ERR_REQUEST;
+        }
+        if (NULL == flag) {
+            rc = MPI_ERR_ARG;
         }
         if( (NULL == requests) && (0 != count) ) {
             rc = MPI_ERR_REQUEST;
@@ -65,7 +70,9 @@ int MPIX_Continueall(
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_cont_register(cont_req, count, requests, cont_data, statuses);
+    rc = ompi_request_cont_register(cont_req, count, requests, cont_data, &all_complete, statuses);
+
+    *flag = (all_complete) ? 1 : 0;
 
     OMPI_ERRHANDLER_RETURN(rc, MPI_COMM_WORLD, rc, FUNC_NAME);
 }
