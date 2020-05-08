@@ -34,7 +34,7 @@
 #include "ompi/request/request_cb.h"
 #include "ompi/request/request_default.h"
 #include "ompi/constants.h"
-#include "opal/threads/thread_usage.h"
+#include "opal/mca/threads/thread_usage.h"
 
 opal_pointer_array_t             ompi_request_f_to_c_table = {{0}};
 ompi_predefined_request_t        ompi_request_null = {{{{{0}}}}};
