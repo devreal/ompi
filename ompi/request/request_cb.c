@@ -300,8 +300,13 @@ int ompi_request_cont_register(
     int32_t last_num_active = opal_atomic_sub_fetch_32(&cont->num_active,
                                                        num_complete);
     if (0 == last_num_active && 0 < num_complete) {
-        /* set flag and return the continuation to the free-list */
-        *all_complete = true;
+        /**
+         * set flag and return the continuation to the free-list
+         * NOTE: only set the flag if *no* continuations have been registered.
+         */
+        if (0 == num_registered) {
+            *all_complete = true;
+        }
         ompi_request_cont_destroy(cont, cont_req);
     }
 
