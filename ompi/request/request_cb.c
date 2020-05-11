@@ -215,19 +215,6 @@ ompi_request_cont_t *ompi_request_cont_create(
     return cont;
 }
 
-static inline void handle_complete_request(ompi_request_t *request)
-{
-    /* inactivate / free the request */
-    if (request->req_transient) {
-        /* nothing to do here */
-    } else if (request->req_persistent) {
-        request->req_state = OMPI_REQUEST_INACTIVE;
-    } else {
-        /* the request is complete, release the request object */
-        ompi_request_free(&request);
-    }
-}
-
 int ompi_request_cont_register(
   ompi_request_t             *cont_req,
   const int                   count,
@@ -256,21 +243,29 @@ int ompi_request_cont_register(
     int32_t num_registered = 0;
     for (int i = 0; i < count; ++i) {
         if (MPI_REQUEST_NULL != requests[i]) {
-            ompi_request_t *request = requests[i];
             void *cont_compare = REQUEST_CONT_NONE;
-            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&request->cont_obj,
+            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->cont_obj,
                                                         &cont_compare, cont)) {
                 ++num_registered;
             } else {
+                ompi_request_t *request = requests[i];
                 assert(REQUEST_CONT_COMPLETED == cont_compare);
                 /* set the status, if necessary */
                 if (NULL != request->cont_status) {
                     *request->cont_status = request->req_status;
                 }
-                handle_complete_request(request);
+                /* inactivate / free the request */
+                if (request->req_transient) {
+                    /* nothing to do here */
+                } else if (request->req_persistent) {
+                    request->req_state = OMPI_REQUEST_INACTIVE;
+                } else {
+                    /* the request is complete, release the request object */
+                    ompi_request_free(&request);
+                }
             }
             /* take ownership of any non-persistent request */
-            if (!request->req_persistent)
+            if (!requests[i]->req_persistent)
             {
                 requests[i] = MPI_REQUEST_NULL;
             }
