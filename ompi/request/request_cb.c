@@ -238,34 +238,15 @@ int ompi_request_cont_register(
 {
     assert(OMPI_REQUEST_CONT == cont_req->req_type);
 
-    /* fast path: check for complete requests early to avoid atomics and allocation */
-    int num_complete = 0;
-    for (int i = 0; i < count; ++i) {
-        ompi_request_t *request = requests[i];
-        if (MPI_REQUEST_NULL != request) {
-            if (REQUEST_COMPLETE(request)) {
-                ++num_complete;
-                if (MPI_STATUSES_IGNORE != statuses) {
-                    statuses[i] = request->req_status;
-                }
-                handle_complete_request(request);
-                if (!request->req_persistent)
-                {
-                    requests[i] = MPI_REQUEST_NULL;
-                }
-            } else if (MPI_STATUSES_IGNORE != statuses) {
-                /* the request is not complete so set the status ptr if necessary */
+    /* Set status objects if required */
+    if (MPI_STATUSES_IGNORE != statuses) {
+        for (int i = 0; i < count; ++i) {
+            ompi_request_t *request = requests[i];
+            if (MPI_REQUEST_NULL != request) {
                 request->cont_status = &statuses[i];
             }
         }
     }
-
-    if (num_complete == count) {
-        /* fast path: all requests completed, set flag and return */
-        *all_complete = true;
-        return OMPI_SUCCESS;
-    }
-
     *all_complete = false;
 
     ompi_request_cont_t *cont = ompi_request_cont_create(count, cont_req, cont_data);
@@ -296,7 +277,7 @@ int ompi_request_cont_register(
         }
     }
 
-    num_complete = count - num_registered;
+    int num_complete = count - num_registered;
     int32_t last_num_active = opal_atomic_sub_fetch_32(&cont->num_active,
                                                        num_complete);
     if (0 == last_num_active && 0 < num_complete) {
