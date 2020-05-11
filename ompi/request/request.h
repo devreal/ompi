@@ -472,11 +472,9 @@ static inline int ompi_request_complete(ompi_request_t* request, bool with_signa
         }
     }
 
-    /* regular (non-transient) requests */
     ompi_request_cont_t *cb;
     cb = (ompi_request_cont_t *)OPAL_ATOMIC_SWAP_PTR(&request->cont_obj, REQUEST_CONT_COMPLETED);
     if (REQUEST_CONT_NONE != cb) {
-        /* this assert may trigger if we complete a continuation request while another thread attempts to revive it */
         assert(cb != REQUEST_CONT_COMPLETED);
         if (NULL != request->cont_status) {
             *request->cont_status = request->req_status;

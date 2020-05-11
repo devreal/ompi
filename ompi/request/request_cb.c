@@ -29,19 +29,10 @@ static opal_fifo_t request_cont_fifo;
 
 static opal_mutex_t request_cont_lock;
 
-/*
- * Allow multiple threads to progress callbacks concurrently
- * but protect from recursive progressing
- */
-static opal_thread_local int in_progress = 0;
-
 /**
  * Flag indicating whether the progress callback has been registered.
  */
 static opal_atomic_int32_t progress_callback_registered;
-
-opal_atomic_int32_t num_active_callbacks = 0; /**< the number of unfinished callbacks */
-
 
 
 static void ompi_request_cont_construct(ompi_request_cont_t* cont)
@@ -111,9 +102,15 @@ void ompi_request_cont_invoke(ompi_request_cont_t *cont)
 static
 int ompi_request_cont_progress_callback()
 {
-    int completed = 0;
-    if (opal_fifo_is_empty(&request_cont_fifo) || in_progress) return 0;
+    /*
+     * Allow multiple threads to progress callbacks concurrently
+     * but protect from recursive progressing
+     */
+    static opal_thread_local int in_progress = 0;
 
+    if (in_progress || opal_fifo_is_empty(&request_cont_fifo)) return 0;
+
+    int completed = 0;
     in_progress = 1;
 
     do {
@@ -206,18 +203,15 @@ ompi_request_cont_t *ompi_request_cont_create(
     /* signal that the continuation request has a new continuation */
     OBJ_RETAIN(cont_req);
     opal_atomic_lock(&cont_req->cont_lock);
-    //int32_t num_active = OPAL_THREAD_FETCH_ADD32(&cont_req->cont_num_active, 1);
     int32_t num_active = cont_req->cont_num_active++;
     if (num_active == 0) {
         /* (re)activate the continuation request upon first registration */
-        //printf("Reactivating cont_req %p\n", cont_req);
         assert(REQUEST_COMPLETE(cont_req));
         cont_req->cont_obj     = REQUEST_CONT_NONE;
         cont_req->req_complete = REQUEST_PENDING;
     }
     opal_atomic_unlock(&cont_req->cont_lock);
 
-    //printf("Allocated cont %p with cont_req %p\n", cont, cont_req);
     return cont;
 }
 
@@ -285,7 +279,6 @@ int ompi_request_cont_register(
             void *cont_compare = REQUEST_CONT_NONE;
             if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&request->cont_obj,
                                                         &cont_compare, cont)) {
-                //printf("Registered cont %p with op_req %p\n", cont, request);
                 ++num_registered;
             } else {
                 assert(REQUEST_CONT_COMPLETED == cont_compare);
@@ -306,11 +299,9 @@ int ompi_request_cont_register(
     num_complete = count - num_registered;
     int32_t last_num_active = opal_atomic_sub_fetch_32(&cont->num_active,
                                                        num_complete);
-    //printf("Cont %p last_num_active %d with num_registered %d\n", cont, last_num_active, num_registered);
     if (0 == last_num_active && 0 < num_complete) {
         /* set flag and return the continuation to the free-list */
         *all_complete = true;
-        //printf("All complete for cont %p with cont_req %p\n", cont, cont_req);
         ompi_request_cont_destroy(cont, cont_req);
     }
 
