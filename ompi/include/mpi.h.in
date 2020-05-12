@@ -1711,7 +1711,7 @@ OMPI_DECLSPEC  MPI_Request MPI_Request_f2c(MPI_Fint request);
 OMPI_DECLSPEC  int MPI_Request_free(MPI_Request *request);
 OMPI_DECLSPEC  int MPI_Request_get_status(MPI_Request request, int *flag,
                                           MPI_Status *status);
-typedef int (MPI_Continue_cb_t)(void *user_data);
+typedef void (MPI_Continue_cb_t)(void *user_data);
 OMPI_DECLSPEC  int MPI_Continue_init(MPI_Request *cont_req);
 OMPI_DECLSPEC  int MPI_Continue(MPI_Request *request, int *flag, MPI_Continue_cb_t *cb, void *cb_data,
                                  MPI_Status *status, MPI_Request cont_req);
