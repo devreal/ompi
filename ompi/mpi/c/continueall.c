@@ -29,12 +29,13 @@
 static const char FUNC_NAME[] = "MPI_Continueall";
 
 int MPI_Continueall(
-    int          count,
-    MPI_Request  requests[],
-    int         *flag,
-    void        *cont_data,
-    MPI_Status   statuses[],
-    MPI_Request  cont_req)
+    int                count,
+    MPI_Request        requests[],
+    int               *flag,
+    MPI_Continue_cb_t *cont_cb,
+    void              *cont_data,
+    MPI_Status         statuses[],
+    MPI_Request        cont_req)
 {
     int rc;
     bool all_complete = false;
@@ -70,7 +71,8 @@ int MPI_Continueall(
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_cont_register(cont_req, count, requests, cont_data, &all_complete, statuses);
+    rc = ompi_request_cont_register(cont_req, count, requests, cont_cb,
+                                    cont_data, &all_complete, statuses);
 
     *flag = (all_complete) ? 1 : 0;
 

@@ -37,15 +37,17 @@ static opal_atomic_int32_t progress_callback_registered;
 
 static void ompi_request_cont_construct(ompi_request_cont_t* cont)
 {
-    cont->cont_req = NULL;
-    cont->cont_data = NULL;
+    cont->cont_req   = NULL;
+    cont->cont_cb    = NULL;
+    cont->cont_data  = NULL;
     cont->num_active = 0;
 }
 
 static void ompi_request_cont_destruct(ompi_request_cont_t* cont)
 {
-    assert(cont->cont_req == NULL);
-    assert(cont->cont_data == NULL);
+    assert(cont->cont_req   == NULL);
+    assert(cont->cont_cb    == NULL);
+    assert(cont->cont_data  == NULL);
     assert(cont->num_active == 0);
 }
 
@@ -76,6 +78,7 @@ void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_r
     opal_atomic_unlock(&cont_req->cont_lock);
     OBJ_RELEASE(cont_req);
 
+    cont->cont_cb   = NULL;
     cont->cont_data = NULL;
     cont->cont_req  = NULL;
     opal_free_list_return(&request_callback_freelist, &cont->super);
@@ -91,10 +94,8 @@ void ompi_request_cont_invoke(ompi_request_cont_t *cont)
     assert(NULL != cont_req);
     assert(OMPI_REQUEST_CONT == cont_req->req_type);
 
-    MPI_Continue_cb_t *fn = cont_req->cont_cb;
+    MPI_Continue_cb_t *fn = cont->cont_cb;
     void *cont_data = cont->cont_data;
-    cont->cont_data = NULL;
-    cont->cont_req  = NULL;
     fn(cont_data);
     ompi_request_cont_destroy(cont, cont_req);
 }
@@ -192,11 +193,13 @@ static inline
 ompi_request_cont_t *ompi_request_cont_create(
   int                         count,
   ompi_request_t             *cont_req,
+  MPI_Continue_cb_t          *cont_cb,
   void                       *cont_data)
 {
     ompi_request_cont_t *cont;
     cont = (ompi_request_cont_t *)opal_free_list_get(&request_callback_freelist);
     cont->cont_req  = cont_req;
+    cont->cont_cb   = cont_cb;
     cont->cont_data = cont_data;
     cont->num_active = count;
 
@@ -219,6 +222,7 @@ int ompi_request_cont_register(
   ompi_request_t             *cont_req,
   const int                   count,
   ompi_request_t             *requests[],
+  MPI_Continue_cb_t          *cont_cb,
   void                       *cont_data,
   bool                       *all_complete,
   ompi_status_public_t        statuses[])
@@ -236,7 +240,7 @@ int ompi_request_cont_register(
     }
     *all_complete = false;
 
-    ompi_request_cont_t *cont = ompi_request_cont_create(count, cont_req, cont_data);
+    ompi_request_cont_t *cont = ompi_request_cont_create(count, cont_req, cont_cb, cont_data);
 
     opal_atomic_wmb();
 
@@ -302,7 +306,7 @@ static int ompi_request_cont_req_free(ompi_request_t** cont_req)
     return OMPI_SUCCESS;
 }
 
-int ompi_request_cont_allocate_cont_req(MPI_Continue_cb_t *fn, ompi_request_t **cont_req)
+int ompi_request_cont_allocate_cont_req(ompi_request_t **cont_req)
 {
     ompi_request_t *res = OBJ_NEW(ompi_request_t);
 
@@ -314,7 +318,6 @@ int ompi_request_cont_allocate_cont_req(MPI_Continue_cb_t *fn, ompi_request_t **
         res->req_transient  = true;
         res->req_free = ompi_request_cont_req_free;
         res->req_status = ompi_status_empty; /* always returns MPI_SUCCESS */
-        res->cont_cb = fn;
         opal_atomic_lock_init(&res->cont_lock, 0);
 
         *cont_req = res;

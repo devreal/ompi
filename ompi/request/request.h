@@ -142,7 +142,6 @@ struct ompi_request_t {
     ompi_mpi_object_t req_mpi_object;           /**< Pointer to MPI object that created this request */
     ompi_request_cont_t  *cont_obj;             /**< User-defined continuation state */
     ompi_status_public_t *cont_status;          /**< The status object to set before invoking continuation */
-    MPI_Continue_cb_t    *cont_cb;              /**< The callback registered for a continuation request */
     opal_atomic_int32_t   cont_num_active;      /**< The number of active continuations registered with a continuation request */
     opal_atomic_lock_t    cont_lock;            /**< Lock used for continuation requests */
 };
@@ -185,7 +184,6 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
         (request)->req_complete_cb_data = NULL;                 \
         (request)->cont_obj  = REQUEST_CONT_NONE;               \
         (request)->cont_status = NULL;                          \
-        (request)->cont_cb = NULL;                              \
         (request)->cont_num_active = 0;                         \
     } while (0);
 

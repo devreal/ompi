@@ -39,6 +39,7 @@ OMPI_DECLSPEC OBJ_CLASS_DECLARATION(ompi_request_cont_t);
 struct ompi_request_cont_t {
     opal_free_list_item_t super;      /**< Base type */
     ompi_request_t *cont_req;         /**< The continuation request this continuation is registered with */
+    MPI_Continue_cb_t *cont_cb;       /**< The callback function to invoke */
     void *cont_data;                  /**< Continuation state provided by the user */
     opal_atomic_int32_t num_active;   /**< The number of active operation requests on this callback */
 };
@@ -71,6 +72,7 @@ int ompi_request_cont_register(
   ompi_request_t             *cont_req,
   int                         count,
   ompi_request_t             *requests[],
+  MPI_Continue_cb_t          *cont_cb,
   void                       *cont_data,
   bool                       *all_complete,
   ompi_status_public_t        statuses[]);
@@ -79,7 +81,7 @@ int ompi_request_cont_register(
 /**
  * Allocate a new (presistent & transient) continuation request.
  */
-int ompi_request_cont_allocate_cont_req(MPI_Continue_cb_t *fn, ompi_request_t **cont_req);
+int ompi_request_cont_allocate_cont_req(ompi_request_t **cont_req);
 
 
 /**

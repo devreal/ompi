@@ -68,7 +68,6 @@ static void ompi_request_construct(ompi_request_t* req)
     req->req_mpi_object.comm = (struct ompi_communicator_t*) NULL;
     req->cont_obj         = NULL;
     req->cont_status      = NULL;
-    req->cont_cb          = NULL;
     req->cont_num_active  = 0;
 }
 

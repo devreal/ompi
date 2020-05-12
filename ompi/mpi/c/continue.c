@@ -29,11 +29,12 @@
 static const char FUNC_NAME[] = "MPI_Continue";
 
 int MPI_Continue(
-    MPI_Request *request,
-    int         *flag,
-    void        *cb_data,
-    MPI_Status  *status,
-    MPI_Request cont_req)
+    MPI_Request       *request,
+    int               *flag,
+    MPI_Continue_cb_t *cont_cb,
+    void              *cb_data,
+    MPI_Status        *status,
+    MPI_Request        cont_req)
 {
     int rc;
     bool all_complete = false;
@@ -59,9 +60,8 @@ int MPI_Continue(
 
     OPAL_CR_ENTER_LIBRARY();
 
-    rc = ompi_request_cont_register(cont_req, 1, request, cb_data, &all_complete,
-                                    MPI_STATUS_IGNORE == status
-                                    ? MPI_STATUSES_IGNORE : status);
+    rc = ompi_request_cont_register(cont_req, 1, request, cont_cb, cb_data, &all_complete,
+                                    MPI_STATUS_IGNORE == status ? MPI_STATUSES_IGNORE : status);
 
     *flag = (all_complete) ? 1 : 0;
 
