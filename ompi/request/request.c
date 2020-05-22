@@ -59,6 +59,7 @@ static void ompi_request_construct(ompi_request_t* req)
     req->req_state        = OMPI_REQUEST_INVALID;
     req->req_complete     = false;
     req->req_persistent   = false;
+    req->req_transient    = false;
     req->req_start        = NULL;
     req->req_free         = NULL;
     req->req_cancel       = NULL;
