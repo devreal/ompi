@@ -61,15 +61,11 @@ OBJ_CLASS_INSTANCE(
 static inline
 void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_req)
 {
-    //ompi_request_t *cont_req = cont->cont_req;
-    //printf("Returning cont %p with cont_req %p\n", cont, cont_req);
-
     opal_atomic_lock(&cont_req->cont_lock);
     //int32_t num_active = opal_atomic_sub_fetch_32(&cont_req->cont_num_active, 1);
     int num_active = --cont_req->cont_num_active;
     assert(num_active >= 0);
     if (0 == num_active) {
-        //printf("Completing cont_req %p\n", cont_req);
         assert(!REQUEST_COMPLETE(cont_req));
         opal_atomic_wmb();
         /* signal that all continuations were found complete */
@@ -149,7 +145,6 @@ int ompi_request_cont_init(void)
 
 int ompi_request_cont_finalize(void)
 {
-    //printf("ompi_request_cont_finalize \n");
     if (progress_callback_registered) {
         opal_progress_unregister(&ompi_request_cont_progress_callback);
     }
@@ -180,7 +175,6 @@ void ompi_request_cont_complete_req(ompi_request_cont_t *cb)
 {
     int32_t num_active = opal_atomic_sub_fetch_32(&cb->num_active, 1);
     assert(num_active >= 0);
-    //printf("Request completed for cont %p num_active %d\n", cb, num_active);
     if (0 == num_active) {
         // we were the last to deregister so enqueue for later processing
         ompi_request_cont_enqueue_complete(cb);
@@ -259,16 +253,12 @@ int ompi_request_cont_register(
                 if (NULL != request->cont_status) {
                     *request->cont_status = request->req_status;
                 }
-                /* inactivate / free the request */
-                if (request->req_transient) {
-                    /* nothing to do here */
-                    printf("Request %p is transient, not freeing\n", request);
-                } else if (request->req_persistent) {
-                    request->req_state = OMPI_REQUEST_INACTIVE;
-                    printf("Request %p is persistent, not freeing\n", request);
+                if (request->req_persistent) {
+                    if (!request->req_transient) {
+                        request->req_state = OMPI_REQUEST_INACTIVE;
+                    }
                 } else {
                     /* the request is complete, release the request object */
-                    printf("Request %p is not persistent, freeing\n", request);
                     ompi_request_free(&request);
                 }
             }
