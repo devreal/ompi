@@ -25,7 +25,7 @@ static opal_free_list_t request_callback_freelist;
  * invoked. Use atomic push to avoid race conditions if multiple threads
  * complete requests.
  */
-static opal_fifo_t request_cont_fifo;
+opal_fifo_t *request_cont_fifo = NULL;
 
 static opal_mutex_t request_cont_lock;
 
@@ -100,7 +100,6 @@ void ompi_request_cont_invoke(ompi_request_cont_t *cont)
     ompi_request_cont_destroy(cont, cont_req);
 }
 
-static
 int ompi_request_cont_progress_callback()
 {
     /*
@@ -109,7 +108,7 @@ int ompi_request_cont_progress_callback()
      */
     static opal_thread_local int in_progress = 0;
 
-    if (in_progress || opal_fifo_is_empty(&request_cont_fifo)) return 0;
+    if (in_progress || opal_fifo_is_empty(request_cont_fifo)) return 0;
 
     int completed = 0;
     in_progress = 1;
@@ -117,7 +116,7 @@ int ompi_request_cont_progress_callback()
     do {
         ompi_request_cont_t *cb;
         OPAL_THREAD_LOCK(&request_cont_lock);
-        cb = (ompi_request_cont_t*)opal_fifo_pop_st(&request_cont_fifo);
+        cb = (ompi_request_cont_t*)opal_fifo_pop_st(request_cont_fifo);
         OPAL_THREAD_UNLOCK(&request_cont_lock);
         if (NULL == cb) break;
         ompi_request_cont_invoke(cb);
@@ -134,7 +133,8 @@ int ompi_request_cont_init(void)
     progress_callback_registered = 0;
 
     OBJ_CONSTRUCT(&request_cont_lock, opal_mutex_t);
-    OBJ_CONSTRUCT(&request_cont_fifo, opal_fifo_t);
+    request_cont_fifo = malloc(sizeof(*request_cont_fifo));
+    OBJ_CONSTRUCT(request_cont_fifo, opal_fifo_t);
 
     OBJ_CONSTRUCT(&request_callback_freelist, opal_free_list_t);
     opal_free_list_init(&request_callback_freelist,
@@ -153,7 +153,8 @@ int ompi_request_cont_finalize(void)
     if (progress_callback_registered) {
         opal_progress_unregister(&ompi_request_cont_progress_callback);
     }
-    OBJ_DESTRUCT(&request_cont_fifo);
+    OBJ_DESTRUCT(request_cont_fifo);
+    free(request_cont_fifo);
     OBJ_DESTRUCT(&request_cont_lock);
     OBJ_DESTRUCT(&request_callback_freelist);
 
@@ -167,7 +168,7 @@ static void
 ompi_request_cont_enqueue_complete(ompi_request_cont_t *cont)
 {
     OPAL_THREAD_LOCK(&request_cont_lock);
-    opal_fifo_push_st(&request_cont_fifo, &cont->super.super);
+    opal_fifo_push_st(request_cont_fifo, &cont->super.super);
     if (OPAL_UNLIKELY(!progress_callback_registered)) {
         opal_progress_register_post(&ompi_request_cont_progress_callback);
         progress_callback_registered = true;
@@ -261,10 +262,13 @@ int ompi_request_cont_register(
                 /* inactivate / free the request */
                 if (request->req_transient) {
                     /* nothing to do here */
+                    printf("Request %p is transient, not freeing\n", request);
                 } else if (request->req_persistent) {
                     request->req_state = OMPI_REQUEST_INACTIVE;
+                    printf("Request %p is persistent, not freeing\n", request);
                 } else {
                     /* the request is complete, release the request object */
+                    printf("Request %p is not persistent, freeing\n", request);
                     ompi_request_free(&request);
                 }
             }
@@ -323,11 +327,4 @@ int ompi_request_cont_allocate_cont_req(ompi_request_t **cont_req)
     }
 
     return OMPI_ERR_OUT_OF_RESOURCE;
-}
-
-
-int ompi_request_cont_progress_ready()
-{
-    ompi_request_cont_progress_callback();
-    return OMPI_SUCCESS;
 }

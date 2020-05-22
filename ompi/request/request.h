@@ -184,7 +184,6 @@ typedef struct ompi_predefined_request_t ompi_predefined_request_t;
         (request)->req_complete_cb_data = NULL;                 \
         (request)->cont_obj  = REQUEST_CONT_NONE;               \
         (request)->cont_status = NULL;                          \
-        (request)->cont_num_active = 0;                         \
     } while (0);
 
 

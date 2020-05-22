@@ -15,6 +15,7 @@
 #include <assert.h>
 #include "ompi_config.h"
 #include "opal/class/opal_free_list.h"
+#include "opal/class/opal_fifo.h"
 #include "mpi.h"
 
 
@@ -46,6 +47,8 @@ struct ompi_request_cont_t {
 
 /* Convenience typedef */
 typedef struct ompi_request_cont_t ompi_request_cont_t;
+
+extern opal_fifo_t *request_cont_fifo;
 
 /**
  * Initialize the user-callback infrastructure.
@@ -85,9 +88,22 @@ int ompi_request_cont_allocate_cont_req(ompi_request_t **cont_req);
 
 
 /**
+ * Progress outstanding ready continuations.
+ */
+int ompi_request_cont_progress_callback();
+
+
+/**
  * Progress completed requests whose user-callback are pending.
  */
-int ompi_request_cont_progress_ready();
+static inline
+int ompi_request_cont_progress_ready()
+{
+    /* fast-path */
+    if (opal_fifo_is_empty(request_cont_fifo)) return OMPI_SUCCESS;
+
+    return ompi_request_cont_progress_callback();
+}
 
 END_C_DECLS
 
