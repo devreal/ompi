@@ -148,8 +148,11 @@ void mca_pml_ucx_request_cleanup(void *request);
 
 static inline void mca_pml_ucx_request_reset(ompi_request_t *req)
 {
-    OMPI_REQUEST_INIT(req, req->req_persistent);
     req->req_complete          = REQUEST_PENDING;
+    /* TODO: We should call REQUEST_INIT here but the isend/irecv
+     * calls don't properly set the state flags */
+    req->cont_obj              = REQUEST_CONT_NONE;
+    req->cont_status           = NULL;
 }
 
 __opal_attribute_always_inline__
