@@ -91,8 +91,6 @@ static opal_atomic_int32_t num_event_users = 0;
 static int debug_output = -1;
 #endif
 
-static uint64_t opal_progress_called = 0;
-
 /**
  * Fake callback used for threading purpose when one thread
  * progesses callbacks while another unregister somes. The root
@@ -125,8 +123,6 @@ static void opal_progress_finalize (void)
     callbacks_post_size = 0;
     free ((void *) callbacks_post);
     callbacks_post = NULL;
-
-    printf("opal_progress_called %lu\n", opal_progress_called);
 
     opal_atomic_unlock(&progress_lock);
 }
@@ -247,8 +243,6 @@ opal_progress(void)
     static uint32_t num_calls = 0;
     size_t i;
     int events = 0;
-
-    opal_atomic_add_fetch_64(&opal_progress_called, 1);
 
     /* progress all registered callbacks */
     for (i = 0 ; i < callbacks_len ; ++i) {
