@@ -74,7 +74,7 @@ ompi_request_cont_enqueue_complete(ompi_request_cont_t *cont);
 static inline
 void ompi_request_cont_complete_req(ompi_request_cont_t *cb)
 {
-    int32_t num_active = opal_atomic_sub_fetch_32(&cb->num_active, 1);
+    int32_t num_active = OPAL_THREAD_ADD_FETCH32(&cb->num_active, -1);
     assert(num_active >= 0);
     if (0 == num_active) {
         // we were the last to deregister so enqueue for later processing

@@ -262,8 +262,8 @@ int ompi_request_cont_register(
     }
 
     int num_complete = count - num_registered;
-    int32_t last_num_active = opal_atomic_sub_fetch_32(&cont->num_active,
-                                                       num_complete);
+    int32_t last_num_active = OPAL_THREAD_ADD_FETCH32(&cont->num_active,
+                                                      -num_complete);
     if (0 == last_num_active && 0 < num_complete) {
         /**
          * set flag and return the continuation to the free-list
