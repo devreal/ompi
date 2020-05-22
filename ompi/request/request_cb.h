@@ -60,11 +60,27 @@ int ompi_request_cont_init(void);
  */
 int ompi_request_cont_finalize(void);
 
+
+/**
+ * Enqueue a completed continuation for later execution.
+ */
+void
+ompi_request_cont_enqueue_complete(ompi_request_cont_t *cont);
+
 /**
  * Notify the continuation that the request is complete, potentially
  * enqueueing the callback for later invocation.
  */
-void ompi_request_cont_complete_req(ompi_request_cont_t *cb);
+static inline
+void ompi_request_cont_complete_req(ompi_request_cont_t *cb)
+{
+    int32_t num_active = opal_atomic_sub_fetch_32(&cb->num_active, 1);
+    assert(num_active >= 0);
+    if (0 == num_active) {
+        // we were the last to deregister so enqueue for later processing
+        ompi_request_cont_enqueue_complete(cb);
+    }
+}
 
 /**
  * Register a continuation for a set of operations represented by \c requests.

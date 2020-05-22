@@ -62,7 +62,6 @@ static inline
 void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_req)
 {
     opal_atomic_lock(&cont_req->cont_lock);
-    //int32_t num_active = opal_atomic_sub_fetch_32(&cont_req->cont_num_active, 1);
     int num_active = --cont_req->cont_num_active;
     assert(num_active >= 0);
     if (0 == num_active) {
@@ -74,9 +73,11 @@ void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_r
     opal_atomic_unlock(&cont_req->cont_lock);
     OBJ_RELEASE(cont_req);
 
+#ifdef OPAL_ENABLE_DEBUG
     cont->cont_cb   = NULL;
     cont->cont_data = NULL;
     cont->cont_req  = NULL;
+#endif // OPAL_ENABLE_DEBUG
     opal_free_list_return(&request_callback_freelist, &cont->super);
 }
 
@@ -159,7 +160,7 @@ int ompi_request_cont_finalize(void)
 /**
  * Enqueue the continuation for later invocation.
  */
-static void
+void
 ompi_request_cont_enqueue_complete(ompi_request_cont_t *cont)
 {
     OPAL_THREAD_LOCK(&request_cont_lock);
@@ -169,16 +170,6 @@ ompi_request_cont_enqueue_complete(ompi_request_cont_t *cont)
         progress_callback_registered = true;
     }
     OPAL_THREAD_UNLOCK(&request_cont_lock);
-}
-
-void ompi_request_cont_complete_req(ompi_request_cont_t *cb)
-{
-    int32_t num_active = opal_atomic_sub_fetch_32(&cb->num_active, 1);
-    assert(num_active >= 0);
-    if (0 == num_active) {
-        // we were the last to deregister so enqueue for later processing
-        ompi_request_cont_enqueue_complete(cb);
-    }
 }
 
 /**
