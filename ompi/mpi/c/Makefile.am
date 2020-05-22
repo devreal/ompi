@@ -322,7 +322,6 @@ libmpi_c_mpi_la_SOURCES = \
         request_f2c.c \
         request_free.c \
         request_get_status.c \
-        progress.c \
 	rget.c \
 	rget_accumulate.c \
 	rput.c \
