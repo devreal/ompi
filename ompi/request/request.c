@@ -136,6 +136,7 @@ int ompi_request_init(void)
     ompi_request_null.request.req_free = ompi_request_null_free;
     ompi_request_null.request.req_cancel = ompi_request_null_cancel;
     ompi_request_null.request.req_mpi_object.comm = &ompi_mpi_comm_world.comm;
+    ompi_request_null.request.cont_obj = REQUEST_CONT_COMPLETED;
 
     if (0 != ompi_request_null.request.req_f_to_c_index) {
         return OMPI_ERR_REQUEST;
@@ -169,7 +170,7 @@ int ompi_request_init(void)
     ompi_request_empty.req_free = ompi_request_empty_free;
     ompi_request_empty.req_cancel = ompi_request_null_cancel;
     ompi_request_empty.req_mpi_object.comm = &ompi_mpi_comm_world.comm;
-
+    ompi_request_empty.cont_obj = REQUEST_CONT_COMPLETED;
     if (1 != ompi_request_empty.req_f_to_c_index) {
         return OMPI_ERR_REQUEST;
     }

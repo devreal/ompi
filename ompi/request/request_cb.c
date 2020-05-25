@@ -234,8 +234,7 @@ int ompi_request_cont_register(
     for (int i = 0; i < count; ++i) {
         if (MPI_REQUEST_NULL != requests[i]) {
             void *cont_compare = REQUEST_CONT_NONE;
-            if (!REQUEST_COMPLETE(requests[i]) &&
-                OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->cont_obj,
+            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->cont_obj,
                                                         &cont_compare, cont)) {
                 ++num_registered;
             } else {
