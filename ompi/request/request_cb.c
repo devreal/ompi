@@ -61,7 +61,9 @@ OBJ_CLASS_INSTANCE(
 static inline
 void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_req)
 {
-    opal_atomic_lock(&cont_req->cont_lock);
+    if (opal_using_threads()) {
+        opal_atomic_lock(&cont_req->cont_lock);
+    }
     int num_active = --cont_req->cont_num_active;
     assert(num_active >= 0);
     if (0 == num_active) {
@@ -70,7 +72,9 @@ void ompi_request_cont_destroy(ompi_request_cont_t *cont, ompi_request_t *cont_r
         /* signal that all continuations were found complete */
         ompi_request_complete(cont_req, true);
     }
-    opal_atomic_unlock(&cont_req->cont_lock);
+    if (opal_using_threads()) {
+        opal_atomic_unlock(&cont_req->cont_lock);
+    }
     OBJ_RELEASE(cont_req);
 
 #ifdef OPAL_ENABLE_DEBUG
@@ -191,7 +195,9 @@ ompi_request_cont_t *ompi_request_cont_create(
 
     /* signal that the continuation request has a new continuation */
     OBJ_RETAIN(cont_req);
-    opal_atomic_lock(&cont_req->cont_lock);
+    if (opal_using_threads()) {
+        opal_atomic_lock(&cont_req->cont_lock);
+    }
     int32_t num_active = cont_req->cont_num_active++;
     if (num_active == 0) {
         /* (re)activate the continuation request upon first registration */
@@ -199,7 +205,9 @@ ompi_request_cont_t *ompi_request_cont_create(
         cont_req->cont_obj     = REQUEST_CONT_NONE;
         cont_req->req_complete = REQUEST_PENDING;
     }
-    opal_atomic_unlock(&cont_req->cont_lock);
+    if (opal_using_threads()) {
+        opal_atomic_unlock(&cont_req->cont_lock);
+    }
 
     return cont;
 }
@@ -234,7 +242,8 @@ int ompi_request_cont_register(
     for (int i = 0; i < count; ++i) {
         if (MPI_REQUEST_NULL != requests[i]) {
             void *cont_compare = REQUEST_CONT_NONE;
-            if (OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->cont_obj,
+            if (REQUEST_CONT_NONE == requests[i]->cont_obj &&
+                OPAL_ATOMIC_COMPARE_EXCHANGE_STRONG_PTR(&requests[i]->cont_obj,
                                                         &cont_compare, cont)) {
                 ++num_registered;
             } else {
