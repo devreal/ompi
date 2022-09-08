@@ -1,6 +1,6 @@
 /* -*- Mode: C; c-basic-offset:4 ; indent-tabs-mode:nil -*- */
 /*
- * Copyright (c) 2020      High Performance Computing Center Stuttgart,
+ * Copyright (c) 2020-2022 High Performance Computing Center Stuttgart,
  *                         University of Stuttgart.  All rights reserved.
  * Copyright (c) 2021      The University of Tennessee and The University
  *                         of Tennessee Research Foundation.  All rights
@@ -17,12 +17,15 @@
 
 #include "ompi_config.h"
 #include "ompi/info/info.h"
+
+/* Workaround to prevent issues with static functions and circular dependency in request.h */
+#define OLD_OMPI_HAVE_MPI_EXT_CONTINUE OMPI_HAVE_MPI_EXT_CONTINUE
+#undef OMPI_HAVE_MPI_EXT_CONTINUE
 #include "ompi/request/request.h"
+#define OMPI_HAVE_MPI_EXT_CONTINUE OLD_OMPI_HAVE_MPI_EXT_CONTINUE
 #include "mpi.h"
 #include "ompi/mpiext/continue/c/mpiext_continue_c.h"
 
-
-struct ompi_request_t;
 
 BEGIN_C_DECLS
 
