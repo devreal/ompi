@@ -20,8 +20,10 @@
 #include <dlfcn.h>
 
 #include "opal/mca/dl/base/base.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "opal/runtime/opal_params.h"
 #include "accelerator_rocm.h"
+#include "opal/util/proc.h"
 
 int opal_accelerator_rocm_memcpy_async = 1;
 int opal_accelerator_rocm_verbose = 0;
@@ -36,6 +38,17 @@ hipStream_t opal_accelerator_rocm_MemcpyStream = NULL;
 const char *opal_accelerator_rocm_component_version_string
     = "OPAL rocm accelerator MCA component version " OPAL_VERSION;
 
+/* Define global variables, used in accelerator_rocm.c */
+//opal_accelerator_rocm_stream_t opal_accelerator_rocm_memcpy_stream = {0};
+hipStream_t opal_accelerator_rocm_alloc_stream = NULL;
+opal_accelerator_rocm_stream_t opal_accelerator_rocm_default_stream = {0};
+opal_mutex_t opal_accelerator_rocm_stream_lock = {0};
+int opal_accelerator_rocm_num_devices = 0;
+
+/* Initialization lock for delayed rocm initialization */
+static opal_mutex_t accelerator_rocm_init_lock;
+static bool accelerator_rocm_init_complete = false;
+static int checkmem;
 
 #define HIP_CHECK(condition)                                                 \
 {                                                                            \
@@ -152,6 +165,105 @@ static int accelerator_rocm_component_register(void)
                                  MCA_BASE_VAR_SCOPE_READONLY, &opal_accelerator_rocm_memcpy_async);
 
     return OPAL_SUCCESS;
+}
+
+int opal_accelerator_rocm_delayed_init()
+{
+    int result = OPAL_SUCCESS;
+    int prio_lo, prio_hi;
+    hipCtx_t cuContext;
+
+    /* Double checked locking to avoid having to
+     * grab locks post lazy-initialization.  */
+    opal_atomic_rmb();
+    if (true == accelerator_rocm_init_complete) {
+        return OPAL_SUCCESS;
+    }
+    OPAL_THREAD_LOCK(&accelerator_rocm_init_lock);
+
+    /* If already initialized, just exit */
+    if (true == accelerator_rocm_init_complete) {
+        goto out;
+    }
+
+    /* Check to see if this process is running in a rocm context.  If
+     * so, all is good.  If not, then disable registration of memory. */
+    result = hipCtxGetCurrent(&cuContext);
+    if (hipSuccess != result) {
+        opal_output_verbose(20, opal_accelerator_base_framework.framework_output, "HIP: hipCtxGetCurrent failed");
+        goto out;
+    } else if ((hipSuccess == result) && (NULL == cuContext)) {
+        opal_output_verbose(20, opal_accelerator_base_framework.framework_output, "HIP: hipCtxGetCurrent returned NULL context");
+        result = OPAL_ERROR;
+        goto out;
+    } else {
+        opal_output_verbose(20, opal_accelerator_base_framework.framework_output, "HIP: hipCtxGetCurrent succeeded");
+    }
+
+    hipGetDeviceCount(&opal_accelerator_rocm_num_devices);
+
+    /* Create stream for use in cuMemcpyAsync synchronous copies */
+    hipStream_t memcpy_stream;
+    result = hipStreamCreateWithFlags(&memcpy_stream, 0);
+    if (OPAL_UNLIKELY(result != hipSuccess)) {
+        opal_show_help("help-accelerator-rocm.txt", "hipStreamCreateWithFlags failed", true,
+                       OPAL_PROC_MY_HOSTNAME, result);
+        goto out;
+    }
+    //OBJ_CONSTRUCT(&opal_accelerator_rocm_memcpy_stream, opal_accelerator_rocm_stream_t);
+    //opal_accelerator_rocm_memcpy_stream.base.stream = malloc(sizeof(hipStream_t));
+    //*(hipStream_t*)opal_accelerator_rocm_memcpy_stream.base.stream = memcpy_stream;
+    opal_accelerator_rocm_MemcpyStream = malloc(sizeof(hipStream_t));
+    *(hipStream_t*)opal_accelerator_rocm_MemcpyStream = memcpy_stream;
+
+    /* Create stream for use in cuMemcpyAsync synchronous copies */
+    result = hipStreamCreateWithFlags(&opal_accelerator_rocm_alloc_stream, 0);
+    if (OPAL_UNLIKELY(result != hipSuccess)) {
+        opal_show_help("help-accelerator-rocm.txt", "hipStreamCreateWithFlags failed", true,
+                       OPAL_PROC_MY_HOSTNAME, result);
+        goto out;
+    }
+
+    /* Create a default stream to be used by various components.
+     * We try to create a high-priority stream and fall back to a regular stream.
+     */
+    hipStream_t *default_stream = malloc(sizeof(hipStream_t));
+    result = hipDeviceGetStreamPriorityRange(&prio_lo, &prio_hi);
+    if (hipSuccess != result) {
+        result = hipStreamCreateWithPriority(default_stream,
+                                            hipStreamNonBlocking, prio_hi);
+    } else {
+        result = hipStreamCreateWithFlags(default_stream, 0);
+    }
+    if (OPAL_UNLIKELY(result != hipSuccess)) {
+        opal_show_help("help-accelerator-rocm.txt", "hipStreamCreateWithFlags failed", true,
+                       OPAL_PROC_MY_HOSTNAME, result);
+        goto out;
+    }
+    OBJ_CONSTRUCT(&opal_accelerator_rocm_default_stream, opal_accelerator_rocm_stream_t);
+    opal_accelerator_rocm_default_stream.base.stream = default_stream;
+
+    hipMemPool_t mpool;
+    int64_t threshold =  1*1024*1024;
+    hipDeviceGetDefaultMemPool(&mpool, 0);
+    hipMemPoolSetAttribute(mpool, hipMemPoolAttrReleaseThreshold, &threshold);
+
+    result = hipHostRegister(&checkmem, sizeof(int), 0);
+    if (result != hipSuccess) {
+        /* If registering the memory fails, print a message and continue.
+         * This is not a fatal error. */
+        opal_show_help("help-accelerator-rocm.txt", "hipHostRegister during init failed", true,
+                       &checkmem, sizeof(int), OPAL_PROC_MY_HOSTNAME, result, "checkmem");
+    } else {
+        opal_output_verbose(20, opal_accelerator_base_framework.framework_output,
+                            "rocm: hipHostRegister OK on test region");
+    }
+    result = OPAL_SUCCESS;
+    opal_atomic_wmb();
+    accelerator_rocm_init_complete = true;
+out:
+    OPAL_THREAD_UNLOCK(&accelerator_rocm_init_lock);
+    return result;
 }
 
 static opal_accelerator_base_module_t* accelerator_rocm_init(void)
