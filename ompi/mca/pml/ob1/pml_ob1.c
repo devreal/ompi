@@ -53,6 +53,7 @@
 #include "ompi/errhandler/errhandler.h"
 #include "opal/mca/pmix/pmix-internal.h"
 #include "ompi/runtime/ompi_spc.h"
+#include "opal/sys/atomic.h"
 
 #include "pml_ob1.h"
 #include "pml_ob1_component.h"
@@ -908,7 +909,7 @@ void mca_pml_ob1_error_handler(
      * termination. Lets simply ignore such errors after MPI is not supposed to
      * be operational anyway.
      */
-    if(ompi_mpi_state >= OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
+    if (opal_atomic_load_32(&ompi_mpi_state) >= OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
         return;
     }
 

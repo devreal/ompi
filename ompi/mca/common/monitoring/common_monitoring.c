@@ -39,7 +39,7 @@
 
 /*** Monitoring specific variables ***/
 /* Keep tracks of how many components are currently using the common part */
-static opal_atomic_int32_t mca_common_monitoring_hold = 0;
+static opal_atomic_int32_t mca_common_monitoring_hold = OPAL_ATOMIC_INIT(0);
 /* Output parameters */
 int mca_common_monitoring_output_stream_id = -1;
 static opal_output_stream_t mca_common_monitoring_output_stream_obj = {

@@ -18,6 +18,7 @@
  */
 
 #include "comm_request.h"
+#include "opal/sys/atomic.h"
 
 #include "opal/class/opal_free_list.h"
 #include "opal/include/opal/sys/atomic.h"
@@ -109,7 +110,7 @@ int ompi_comm_request_schedule_append_w_flags(ompi_comm_request_t *request, ompi
 static int ompi_comm_request_progress (void)
 {
     ompi_comm_request_t *request, *next;
-    static opal_atomic_int32_t progressing = 0;
+    static opal_atomic_int32_t progressing = OPAL_ATOMIC_INIT(0);
     int completed = 0;
 
     /* don't allow re-entry */
@@ -175,7 +176,7 @@ static int ompi_comm_request_progress (void)
     }
 
     opal_mutex_unlock (&ompi_comm_request_mutex);
-    progressing = 0;
+    opal_atomic_store_32(&progressing, 0);
 
     return completed;
 }

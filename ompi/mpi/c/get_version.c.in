@@ -46,7 +46,7 @@ PROTOTYPE ERROR_CLASS get_version(INT_OUT version, INT_OUT subversion)
                (i.e., use a NULL communicator, which will end up at the
                default errhandler, which is abort). */
 
-            int32_t state = ompi_mpi_state;
+            int32_t state = opal_atomic_load_32(&ompi_mpi_state);
             if (state >= OMPI_MPI_STATE_INIT_COMPLETED &&
                 state < OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
                 return OMPI_ERRHANDLER_NOHANDLE_INVOKE(MPI_ERR_ARG,

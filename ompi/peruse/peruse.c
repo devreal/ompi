@@ -18,6 +18,7 @@
 #include "ompi/peruse/peruse.h"
 #include "ompi/peruse/peruse-internal.h"
 #include "ompi/communicator/communicator.h"
+#include "opal/sys/atomic.h"
 #include "ompi/runtime/params.h"
 
 /*
@@ -65,7 +66,7 @@ const int PERUSE_num_events = (sizeof(PERUSE_events) / sizeof(peruse_event_assoc
 int PERUSE_Init (void)
 {
     if (MPI_PARAM_CHECK) {
-        int32_t state = ompi_mpi_state;
+        int32_t state = opal_atomic_load_32(&ompi_mpi_state);
         if (state < OMPI_MPI_STATE_INIT_COMPLETED ||
             state >= OMPI_MPI_STATE_FINALIZE_STARTED) {
             return PERUSE_ERR_INIT;

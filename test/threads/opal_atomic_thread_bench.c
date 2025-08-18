@@ -80,8 +80,8 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 }
 #endif
 
-static opal_atomic_int64_t var_64 = 0;
-static opal_atomic_int32_t var_32 = 0;
+static opal_atomic_int64_t var_64 = OPAL_ATOMIC_INIT(0);
+static opal_atomic_int32_t var_32 = OPAL_ATOMIC_INIT(0);
 static pthread_barrier_t barrier;
 
 #if !defined(timersub)

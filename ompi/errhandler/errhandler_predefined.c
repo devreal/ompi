@@ -266,7 +266,7 @@ void ompi_mpi_errors_return_instance_handler (struct ompi_instance_t **instance,
 static void out(char *str, char *arg)
 {
     if (ompi_rte_initialized &&
-        ompi_mpi_state < OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
+        opal_atomic_load_32(&ompi_mpi_state) < OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
         if (NULL != arg) {
             opal_output(0, str, arg);
         } else {
@@ -400,7 +400,7 @@ static void backend_abort_no_aggregate(int fatal, char *type,
 {
     char *arg;
 
-    int32_t state = ompi_mpi_state;
+    int32_t state = opal_atomic_load_32(&ompi_mpi_state);
     assert(state < OMPI_MPI_STATE_INIT_COMPLETED ||
            state >= OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT);
 

@@ -54,7 +54,7 @@ static void mca_pml_base_send_request_destruct(mca_pml_base_send_request_t* req)
 #if MPI_VERSION >= 4
 int mca_pml_cancel_send_callback(struct ompi_request_t *request, int flag)
 {
-    static opal_atomic_int32_t send_deprecate_count = 0;
+    static opal_atomic_int32_t send_deprecate_count = OPAL_ATOMIC_INIT(0);
     int32_t val;
 
     val = opal_atomic_add_fetch_32(&send_deprecate_count, 1);

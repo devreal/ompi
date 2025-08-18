@@ -169,7 +169,7 @@ ompi_mpi_abort(struct ompi_communicator_t* comm,
 
     /* If the RTE isn't setup yet/any more, then don't even try
        killing everyone.  Sorry, Charlie... */
-    int32_t state = ompi_mpi_state;
+    int32_t state = opal_atomic_load_32(&ompi_mpi_state);
     if (!ompi_rte_initialized) {
         fprintf(stderr, "[%s:%05d] Local abort %s completed successfully, but am not able to aggregate error messages, and not able to guarantee that all other processes were killed!\n",
                 host, (int) pid,

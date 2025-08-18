@@ -47,7 +47,7 @@ void opal_threads_base_wait_sync_global_wakeup_mt(int status)
     opal_mutex_unlock(&wait_sync_lock);
 }
 
-static opal_atomic_int32_t num_thread_in_progress = 0;
+static opal_atomic_int32_t num_thread_in_progress = OPAL_ATOMIC_INIT(0);
 
 #define WAIT_SYNC_PASS_OWNERSHIP(who)                        \
     do {                                                     \

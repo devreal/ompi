@@ -90,7 +90,7 @@ enum {
     OMPI_INSTANCE_FINALIZING   = -2,
 };
 
-opal_atomic_int32_t ompi_instance_count = 0;
+opal_atomic_int32_t ompi_instance_count = OPAL_ATOMIC_INIT(0);
 
 static const char *ompi_instance_builtin_psets[] = {
     "mpi://WORLD",

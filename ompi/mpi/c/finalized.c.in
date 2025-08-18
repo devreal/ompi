@@ -34,7 +34,7 @@ PROTOTYPE ERROR_CLASS finalized(INT_OUT flag)
 {
     ompi_hook_base_mpi_finalized_top(flag);
 
-    int32_t state = ompi_mpi_state;
+    int32_t state = opal_atomic_load_32(&ompi_mpi_state);
 
     if (MPI_PARAM_CHECK) {
         if (NULL == flag) {

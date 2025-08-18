@@ -47,7 +47,7 @@ int ompi_errhandler_invoke(ompi_errhandler_t *errhandler, void *mpi_object,
     /* If we got no errorhandler, then route the error to the appropriate
      * predefined error handler */
     if (NULL == errhandler) {
-        int32_t state = ompi_mpi_state;
+        int32_t state = opal_atomic_load_32(&ompi_mpi_state);
         if (state >= OMPI_MPI_STATE_INIT_COMPLETED &&
             state < OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) {
             comm = (ompi_mpi_compat_mpi3)? &ompi_mpi_comm_world.comm: &ompi_mpi_comm_self.comm;

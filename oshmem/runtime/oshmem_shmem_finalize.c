@@ -75,7 +75,7 @@ int oshmem_shmem_finalize(void)
     /* Note: ompi_mpi_state is set atomically in ompi_mpi_init() and
        ompi_mpi_finalize().  Those 2 functions have the appropriate
        memory barriers such that we don't need one here. */
-    int32_t state = ompi_mpi_state;
+    int32_t state = opal_atomic_load_32(&ompi_mpi_state);
     if ((OSHMEM_SUCCESS == ret) &&
         (state >= OMPI_MPI_STATE_INIT_COMPLETED &&
          state < OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) &&
