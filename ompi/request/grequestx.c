@@ -28,7 +28,7 @@
 
 static bool requests_initialized = false;
 static opal_list_t requests;
-static opal_atomic_int32_t active_requests = 0;
+static opal_atomic_int32_t active_requests = OPAL_ATOMIC_INIT(0);
 static bool in_progress = false;
 static opal_mutex_t lock = OPAL_MUTEX_STATIC_INIT;
 

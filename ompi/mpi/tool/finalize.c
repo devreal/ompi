@@ -18,6 +18,7 @@
 #include "ompi/mpi/tool/mpit-internal.h"
 
 #include "ompi/runtime/ompi_info_support.h"
+#include "opal/sys/atomic.h"
 #include "opal/include/opal/sys/atomic.h"
 #include "opal/runtime/opal.h"
 
@@ -40,7 +41,7 @@ int MPI_T_finalize (void)
     if (0 == --ompi_mpit_init_count) {
         (void) ompi_info_close_components ();
 
-        int32_t state = ompi_mpi_state;
+        int32_t state = opal_atomic_load_32(&ompi_mpi_state);
         if ((state < OMPI_MPI_STATE_INIT_COMPLETED ||
              state >= OMPI_MPI_STATE_FINALIZE_PAST_COMM_SELF_DESTRUCT) &&
             (NULL != ompi_mpi_main_thread)) {

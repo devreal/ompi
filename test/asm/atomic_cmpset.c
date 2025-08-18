@@ -44,13 +44,13 @@ int nreps = 100;
 int nthreads = 2;
 int enable_verbose = 0;
 
-opal_atomic_int32_t vol32 = 0;
-opal_atomic_int32_t val32 = 0;
+opal_atomic_int32_t vol32 = OPAL_ATOMIC_INIT(0);
+opal_atomic_int32_t val32 = OPAL_ATOMIC_INIT(0);
 int32_t old32 = 0;
 int32_t new32 = 0;
 
-opal_atomic_int64_t vol64 = 0;
-opal_atomic_int64_t val64 = 0;
+opal_atomic_int64_t vol64 = OPAL_ATOMIC_INIT(0);
+opal_atomic_int64_t val64 = OPAL_ATOMIC_INIT(0);
 int64_t old64 = 0;
 int64_t new64 = 0;
 

@@ -32,8 +32,8 @@
 
 #define TEST_REPS 500
 
-opal_atomic_int32_t val32 = 0;
-opal_atomic_int64_t val64 = 0;
+opal_atomic_int32_t val32 = OPAL_ATOMIC_INIT(0);
+opal_atomic_int64_t val64 = OPAL_ATOMIC_INIT(0);
 opal_atomic_int_t valint = 0;
 
 static void *atomic_math_test(void *arg)

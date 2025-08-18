@@ -18,6 +18,7 @@
 
 #include "ompi/mca/osc/osc.h"
 #include "ompi/mca/osc/base/base.h"
+#include "opal/sys/atomic.h"
 #include "ompi/mca/osc/base/osc_base_obj_convert.h"
 #include "opal/mca/common/ucx/common_ucx.h"
 
@@ -358,8 +359,8 @@ static int component_finalize(void) {
     }
     opal_common_ucx_wpool_free(mca_osc_ucx_component.wpool);
 
-    assert(opal_common_ucx_ep_counts == 0);
-    assert(opal_common_ucx_unpacked_rkey_counts == 0);
+    assert(opal_atomic_load_64(&opal_common_ucx_ep_counts) == 0);
+    assert(opal_atomic_load_64(&opal_common_ucx_unpacked_rkey_counts) == 0);
     return OMPI_SUCCESS;
 }
 

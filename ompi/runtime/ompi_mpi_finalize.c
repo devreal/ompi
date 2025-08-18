@@ -113,7 +113,7 @@ int ompi_mpi_finalize(void)
 
     ompi_hook_base_mpi_finalize_top();
 
-    int32_t state = ompi_mpi_state;
+    int32_t state = opal_atomic_load_32(&ompi_mpi_state);
     if (state < OMPI_MPI_STATE_INIT_COMPLETED ||
         state >= OMPI_MPI_STATE_FINALIZE_STARTED) {
         /* Note that if we're not initialized or already finalized, we

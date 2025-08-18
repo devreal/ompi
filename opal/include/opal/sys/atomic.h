@@ -324,6 +324,108 @@ static inline void opal_atomic_unlock(opal_atomic_lock_t *lock);
 
 /**********************************************************************
  *
+ * Atomic load/store
+ *
+ *********************************************************************/
+
+static inline int32_t opal_atomic_load_32(const opal_atomic_int32_t *addr);
+static inline int32_t opal_atomic_load_explicit_32(const opal_atomic_int32_t *addr,
+                                                   opal_memory_order_t order);
+static inline void opal_atomic_store_32(opal_atomic_int32_t *addr, int32_t value);
+static inline void opal_atomic_store_explicit_32(opal_atomic_int32_t *addr, int32_t value,
+                                                 opal_memory_order_t order);
+
+static inline int64_t opal_atomic_load_64(const opal_atomic_int64_t *addr);
+static inline int64_t opal_atomic_load_explicit_64(const opal_atomic_int64_t *addr,
+                                                   opal_memory_order_t order);
+static inline void opal_atomic_store_64(opal_atomic_int64_t *addr, int64_t value);
+static inline void opal_atomic_store_explicit_64(opal_atomic_int64_t *addr, int64_t value,
+                                                 opal_memory_order_t order);
+
+static inline size_t opal_atomic_load_size_t(const opal_atomic_size_t *addr);
+static inline size_t opal_atomic_load_explicit_size_t(const opal_atomic_size_t *addr,
+                                                      opal_memory_order_t order);
+static inline void opal_atomic_store_size_t(opal_atomic_size_t *addr, size_t value);
+static inline void opal_atomic_store_explicit_size_t(opal_atomic_size_t *addr, size_t value,
+                                                     opal_memory_order_t order);
+
+#if OPAL_USE_C11_ATOMICS == 0
+static inline int32_t opal_atomic_load_32(const opal_atomic_int32_t *addr)
+{
+    return *addr;
+}
+
+static inline int32_t opal_atomic_load_explicit_32(const opal_atomic_int32_t *addr,
+                                                   opal_memory_order_t order)
+{
+    (void) order;
+    return *addr;
+}
+
+static inline void opal_atomic_store_32(opal_atomic_int32_t *addr, int32_t value)
+{
+    *addr = value;
+}
+
+static inline void opal_atomic_store_explicit_32(opal_atomic_int32_t *addr, int32_t value,
+                                                 opal_memory_order_t order)
+{
+    (void) order;
+    *addr = value;
+}
+
+static inline int64_t opal_atomic_load_64(const opal_atomic_int64_t *addr)
+{
+    return *addr;
+}
+
+static inline int64_t opal_atomic_load_explicit_64(const opal_atomic_int64_t *addr,
+                                                   opal_memory_order_t order)
+{
+    (void) order;
+    return *addr;
+}
+
+static inline void opal_atomic_store_64(opal_atomic_int64_t *addr, int64_t value)
+{
+    *addr = value;
+}
+
+static inline void opal_atomic_store_explicit_64(opal_atomic_int64_t *addr, int64_t value,
+                                                 opal_memory_order_t order)
+{
+    (void) order;
+    *addr = value;
+}
+
+static inline size_t opal_atomic_load_size_t(const opal_atomic_size_t *addr)
+{
+    return *addr;
+}
+
+static inline size_t opal_atomic_load_explicit_size_t(const opal_atomic_size_t *addr,
+                                                      opal_memory_order_t order)
+{
+    (void) order;
+    return *addr;
+}
+
+static inline void opal_atomic_store_size_t(opal_atomic_size_t *addr, size_t value)
+{
+    *addr = value;
+}
+
+static inline void opal_atomic_store_explicit_size_t(opal_atomic_size_t *addr, size_t value,
+                                                     opal_memory_order_t order)
+{
+    (void) order;
+    *addr = value;
+}
+#endif
+
+
+/**********************************************************************
+ *
  * Atomic math operations
  *
  *********************************************************************/

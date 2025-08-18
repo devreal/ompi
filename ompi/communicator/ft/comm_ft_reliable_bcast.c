@@ -18,6 +18,7 @@
 #include "ompi/mca/pml/pml.h"
 #include "ompi/mca/bml/bml.h"
 #include "ompi/mca/bml/base/base.h"
+#include "opal/sys/atomic.h"
 #include "ompi/mca/coll/base/base.h"
 #include "ompi/mca/coll/base/coll_tags.h"
 
@@ -208,7 +209,7 @@ static void ompi_comm_rbcast_bml_recv_cb(
          * that we keep receiving messages after we deregistered the type.
          * Any other time, this is indicative of a problem.
          */
-        assert(ompi_mpi_state >= OMPI_MPI_STATE_FINALIZE_STARTED);
+        assert(opal_atomic_load_32(&ompi_mpi_state) >= OMPI_MPI_STATE_FINALIZE_STARTED);
     }
 }
 

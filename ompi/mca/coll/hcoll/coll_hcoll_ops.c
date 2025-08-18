@@ -16,13 +16,14 @@
 #include "hcoll/api/hcoll_constants.h"
 #include "coll_hcoll_dtypes.h"
 #include "hcoll/api/hcoll_dte.h"
+#include "opal/sys/atomic.h"
 int mca_coll_hcoll_barrier(struct ompi_communicator_t *comm,
                          mca_coll_base_module_t *module){
     int rc;
     mca_coll_hcoll_module_t *hcoll_module = (mca_coll_hcoll_module_t*)module;
     HCOL_VERBOSE(20,"RUNNING HCOL BARRIER");
 
-    if (OPAL_UNLIKELY(ompi_mpi_state >= OMPI_MPI_STATE_FINALIZE_STARTED)) {
+    if (OPAL_UNLIKELY(opal_atomic_load_32(&ompi_mpi_state) >= OMPI_MPI_STATE_FINALIZE_STARTED)) {
         HCOL_VERBOSE(5, "In finalize, reverting to previous barrier");
         goto orig_barrier;
     }
