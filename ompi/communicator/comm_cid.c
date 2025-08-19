@@ -58,7 +58,7 @@
 #include "pmix.h"
 
 /* for use when we don't have a PMIx that supports CID generation */
-opal_atomic_int64_t ompi_comm_next_base_cid = 1;
+opal_atomic_int64_t ompi_comm_next_base_cid = OPAL_ATOMIC_VAR_INIT(1);
 
 /* A macro comparing two CIDs */
 #define OMPI_COMM_CID_IS_LOWER(comm1,comm2) ( ((comm1)->c_index < (comm2)->c_index)? 1:0)

@@ -72,13 +72,13 @@ static opal_timer_t event_progress_last_time = 0;
 static opal_timer_t event_progress_delta = 0;
 #else
 /* current count down until we tick the event library */
-static opal_atomic_int32_t event_progress_counter = 0;
+static opal_atomic_int32_t event_progress_counter = OPAL_ATOMIC_VAR_INIT(0);
 /* reset value for counter when it hits 0 */
 static int32_t event_progress_delta = 0;
 #endif
 /* users of the event library from MPI cause the tick rate to
    be every time */
-static opal_atomic_int32_t num_event_users = 0;
+static opal_atomic_int32_t num_event_users = OPAL_ATOMIC_VAR_INIT(0);
 
 #if OPAL_ENABLE_DEBUG
 static int debug_output = -1;
@@ -159,7 +159,8 @@ int opal_progress_init(void)
         (debug_output, "progress: initialized event flag to: %x", opal_progress_event_flag));
     OPAL_OUTPUT((debug_output, "progress: initialized yield_when_idle to: %s",
                  opal_progress_yield_when_idle ? "true" : "false"));
-    OPAL_OUTPUT((debug_output, "progress: initialized num users to: %d", num_event_users));
+    OPAL_OUTPUT((debug_output, "progress: initialized num users to: %d",
+                 opal_atomic_load(&num_event_users)));
     OPAL_OUTPUT(
         (debug_output, "progress: initialized poll rate to: %ld", (long) event_progress_delta));
 
@@ -170,7 +171,7 @@ int opal_progress_init(void)
 
 static int opal_progress_events(void)
 {
-    static opal_atomic_int32_t lock = 0;
+    static opal_atomic_int32_t lock = OPAL_ATOMIC_VAR_INIT(0);
     int events = 0;
 
     if (opal_progress_event_flag != 0 && !OPAL_THREAD_SWAP_32(&lock, 1)) {
@@ -183,7 +184,9 @@ static int opal_progress_events(void)
         /* trip the event library if we've reached our tick rate and we are
            enabled */
         if (now - event_progress_last_time > event_progress_delta) {
-            event_progress_last_time = (num_event_users > 0) ? now - event_progress_delta : now;
+            event_progress_last_time = (opal_atomic_load(&num_event_users) > 0)
+                                          ? now - event_progress_delta
+                                          : now;
 
             events += opal_event_loop(opal_sync_event_base, opal_progress_event_flag);
         }
@@ -192,11 +195,13 @@ static int opal_progress_events(void)
         /* trip the event library if we've reached our tick rate and we are
            enabled */
         if (OPAL_THREAD_ADD_FETCH32(&event_progress_counter, -1) <= 0) {
-            event_progress_counter = (num_event_users > 0) ? 0 : event_progress_delta;
+            opal_atomic_store(&event_progress_counter,
+                              (opal_atomic_load(&num_event_users) > 0) ? 0
+                                                                      : event_progress_delta);
             events += opal_event_loop(opal_sync_event_base, opal_progress_event_flag);
         }
 #endif /* OPAL_PROGRESS_USE_TIMERS */
-        lock = 0;
+        opal_atomic_store(&lock, 0);
     }
 
     return events;
@@ -236,7 +241,7 @@ int opal_progress(void)
         }
 
         opal_progress_events();
-    } else if (num_event_users > 0) {
+    } else if (opal_atomic_load(&num_event_users) > 0) {
         opal_progress_events();
     }
 
@@ -280,7 +285,7 @@ void opal_progress_event_users_increment(void)
     event_progress_last_time -= event_progress_delta;
 #else
     /* always reset the tick rate - can't hurt */
-    event_progress_counter = 0;
+    opal_atomic_store(&event_progress_counter, 0);
 #endif
 }
 
@@ -298,7 +303,7 @@ void opal_progress_event_users_decrement(void)
 #if !OPAL_PROGRESS_USE_TIMERS
     /* start now in delaying if it's easy */
     if (val >= 0) {
-        event_progress_counter = event_progress_delta;
+        opal_atomic_store(&event_progress_counter, event_progress_delta);
     }
 #endif
 }
@@ -326,7 +331,8 @@ void opal_progress_set_event_poll_rate(int polltime)
     event_progress_last_time = opal_timer_base_get_cycles();
 #    endif
 #else
-    event_progress_counter = event_progress_delta = 0;
+    event_progress_delta = 0;
+    opal_atomic_store(&event_progress_counter, 0);
 #endif
 
     if (polltime == 0) {

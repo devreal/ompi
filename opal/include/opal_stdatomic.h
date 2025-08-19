@@ -42,18 +42,38 @@ enum { OPAL_ATOMIC_LOCK_UNLOCKED = 0,
 
 #    include <stdatomic.h>
 
-typedef atomic_int opal_atomic_int_t;
-typedef atomic_long opal_atomic_long_t;
+typedef struct {
+    _Atomic int v;
+} opal_atomic_int_t;
+typedef struct {
+    _Atomic long v;
+} opal_atomic_long_t;
 
-typedef _Atomic int32_t opal_atomic_int32_t;
-typedef _Atomic uint32_t opal_atomic_uint32_t;
-typedef _Atomic int64_t opal_atomic_int64_t;
-typedef _Atomic uint64_t opal_atomic_uint64_t;
+typedef struct {
+    _Atomic int32_t v;
+} opal_atomic_int32_t;
+typedef struct {
+    _Atomic uint32_t v;
+} opal_atomic_uint32_t;
+typedef struct {
+    _Atomic int64_t v;
+} opal_atomic_int64_t;
+typedef struct {
+    _Atomic uint64_t v;
+} opal_atomic_uint64_t;
 
-typedef _Atomic size_t opal_atomic_size_t;
-typedef _Atomic ssize_t opal_atomic_ssize_t;
-typedef _Atomic intptr_t opal_atomic_intptr_t;
-typedef _Atomic uintptr_t opal_atomic_uintptr_t;
+typedef struct {
+    _Atomic size_t v;
+} opal_atomic_size_t;
+typedef struct {
+    _Atomic ssize_t v;
+} opal_atomic_ssize_t;
+typedef struct {
+    _Atomic intptr_t v;
+} opal_atomic_intptr_t;
+typedef struct {
+    _Atomic uintptr_t v;
+} opal_atomic_uintptr_t;
 
 typedef atomic_flag opal_atomic_lock_t;
 
@@ -68,7 +88,9 @@ typedef atomic_flag opal_atomic_lock_t;
 
 #        if OPAL_USE_C11_ATOMICS && OPAL_HAVE_C11_CSWAP_INT128
 
-typedef _Atomic opal_int128_t opal_atomic_int128_t;
+typedef struct {
+    _Atomic opal_int128_t v;
+} opal_atomic_int128_t;
 
 #        else
 
@@ -76,6 +98,12 @@ typedef volatile opal_int128_t opal_atomic_int128_t __opal_attribute_aligned__(1
 
 #        endif
 
+#    endif
+
+#    if OPAL_USE_C11_ATOMICS
+#        define OPAL_ATOMIC_VAR_INIT(value) { .v = (value) }
+#    else
+#        define OPAL_ATOMIC_VAR_INIT(value) (value)
 #    endif
 
 #endif /* !defined(OPAL_STDATOMIC_H) */

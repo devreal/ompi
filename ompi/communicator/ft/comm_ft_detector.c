@@ -94,7 +94,7 @@ static opal_event_base_t* fd_event_base = NULL;
 static void fd_event_cb(int fd, short flags, void* pdetector);
 
 static bool comm_detector_use_thread = false;
-static opal_atomic_int32_t fd_thread_active = 0;
+static opal_atomic_int32_t fd_thread_active = OPAL_ATOMIC_VAR_INIT(0);
 static opal_thread_t fd_thread;
 static void* fd_progress(opal_object_t* obj);
 
@@ -168,8 +168,8 @@ int ompi_comm_failure_detector_init(void) {
         fd_thread.t_arg = NULL;
         ret = opal_thread_start(&fd_thread);
         if( OPAL_SUCCESS != ret ) goto cleanup;
-        while( 0 == fd_thread_active ); /* wait for the fd thread initialization */
-        if( 0 > fd_thread_active ) goto cleanup;
+        while( 0 == opal_atomic_load(&fd_thread_active) ); /* wait for the fd thread initialization */
+        if( 0 > opal_atomic_load(&fd_thread_active) ) goto cleanup;
     }
 
     return OMPI_SUCCESS;
@@ -218,18 +218,18 @@ int ompi_comm_failure_detector_finalize(void) {
 #endif
         while( observing == detector->hb_observing ) {
             /* If observed process changed, recheck if local*/
-            if( !(0 < fd_thread_active) )
+            if( !(0 < opal_atomic_load(&fd_thread_active)) )
             {
                 opal_progress();
             }
         }
     }
 
-    if( 0 < fd_thread_active ) {
+    if( 0 < opal_atomic_load(&fd_thread_active) ) {
         void* tret;
         /* this is not a race condition. Accesses are serialized, we use the
          * atomic for the mfence part of it. */
-        OPAL_THREAD_ADD_FETCH32(&fd_thread_active, -fd_thread_active);
+        OPAL_THREAD_ADD_FETCH32(&fd_thread_active, -opal_atomic_load(&fd_thread_active));
         opal_event_base_loopbreak(fd_event_base);
         opal_thread_join(&fd_thread, &tret);
     }
@@ -587,9 +587,9 @@ void* fd_progress(opal_object_t* obj) {
         return OPAL_THREAD_CANCELLED;
     }
     OPAL_THREAD_ADD_FETCH32(&fd_thread_active, 1);
-    while( 1 == fd_thread_active ); /* wait for init stage 2: start_detector */
+    while( 1 == opal_atomic_load(&fd_thread_active) ); /* wait for init stage 2: start_detector */
     ret = MCA_PML_CALL(irecv(NULL, 0, MPI_BYTE, 0, MCA_COLL_BASE_TAG_FT_END, &ompi_mpi_comm_self.comm, &req));
-    while( fd_thread_active ) {
+    while( opal_atomic_load(&fd_thread_active) ) {
         opal_event_loop(fd_event_base, OPAL_EVLOOP_ONCE);
 #if 0
         /* This test disabled because rdma emulation over TCP would not work without
