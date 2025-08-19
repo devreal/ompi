@@ -54,6 +54,20 @@
 #include "opal/opal_portable_platform.h"
 #include "opal_stdatomic.h"
 
+#if OPAL_USE_C11_ATOMICS
+#    define opal_atomic_load(addr) atomic_load_explicit(&((addr)->v), memory_order_relaxed)
+#    define opal_atomic_store(addr, value)                                                      \
+        atomic_store_explicit(&((addr)->v), (value), memory_order_relaxed)
+#    define opal_atomic_load_explicit(addr, order) atomic_load_explicit(&((addr)->v), (order))
+#    define opal_atomic_store_explicit(addr, value, order)                                      \
+        atomic_store_explicit(&((addr)->v), (value), (order))
+#else
+#    define opal_atomic_load(addr) (*(addr))
+#    define opal_atomic_store(addr, value) (*(addr) = (value))
+#    define opal_atomic_load_explicit(addr, order) opal_atomic_load(addr)
+#    define opal_atomic_store_explicit(addr, value, order) opal_atomic_store(addr, value)
+#endif
+
 BEGIN_C_DECLS
 
 /**********************************************************************

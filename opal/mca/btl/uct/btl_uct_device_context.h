@@ -61,7 +61,7 @@ static inline void mca_btl_uct_context_unlock(mca_btl_uct_device_context_t *cont
 
 static inline int mca_btl_uct_get_context_index(void)
 {
-    static opal_atomic_uint32_t next_uct_index = 0;
+    static opal_atomic_uint32_t next_uct_index = OPAL_ATOMIC_VAR_INIT(0);
     int context_id;
 
 #    if OPAL_C_HAVE__THREAD_LOCAL
@@ -79,7 +79,9 @@ static inline int mca_btl_uct_get_context_index(void)
 #    endif
         /* avoid using atomics in this. i doubt it improves performance to ensure atomicity on the
          * next index in this case. */
-        context_id = next_uct_index++ % mca_btl_uct_component.num_contexts_per_module;
+        context_id = opal_atomic_load(&next_uct_index);
+        opal_atomic_store(&next_uct_index, context_id + 1);
+        context_id %= mca_btl_uct_component.num_contexts_per_module;
 #    if OPAL_C_HAVE__THREAD_LOCAL
     }
 #    endif

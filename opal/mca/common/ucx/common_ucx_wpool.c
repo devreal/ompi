@@ -32,8 +32,8 @@ __thread int initialized = 0;
 #endif
 
 bool opal_common_ucx_thread_enabled = false;
-opal_atomic_int64_t opal_common_ucx_ep_counts = 0;
-opal_atomic_int64_t opal_common_ucx_unpacked_rkey_counts = 0;
+opal_atomic_int64_t opal_common_ucx_ep_counts = OPAL_ATOMIC_VAR_INIT(0);
+opal_atomic_int64_t opal_common_ucx_unpacked_rkey_counts = OPAL_ATOMIC_VAR_INIT(0);
 
 static _ctx_record_t *_tlocal_add_ctx_rec(opal_common_ucx_ctx_t *ctx);
 static inline _ctx_record_t *_tlocal_get_ctx_rec(opal_tsd_tracked_key_t tls_key);

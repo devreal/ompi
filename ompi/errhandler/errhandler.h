@@ -213,7 +213,7 @@ extern opal_atomic_int32_t ompi_instance_count;
  */
 #define OMPI_ERR_INIT_FINALIZE(name)                                       \
     {                                                                      \
-        if (OPAL_UNLIKELY(0 == ompi_instance_count)) {                     \
+        if (OPAL_UNLIKELY(0 == opal_atomic_load(&ompi_instance_count))) {   \
             ompi_errhandler_invoke(NULL, NULL, -1,                         \
                                    ompi_errcode_get_mpi_code(MPI_ERR_ARG), \
                                    name);                                  \

@@ -43,11 +43,13 @@ typedef size_t __attribute__((aligned(SIZEOF_SIZE_T))) xf_size_t;
 // https://github.com/open-mpi/ompi/issues/9722
 
 #if OPAL_USE_GCC_BUILTIN_ATOMICS || OPAL_USE_C11_ATOMICS
-    #define xhc_atomic_load_int(addr) __atomic_load_n(addr, __ATOMIC_RELAXED)
-    #define xhc_atomic_store_int(addr, val) __atomic_store_n(addr, val, __ATOMIC_RELAXED)
+    #define xhc_atomic_load_int(addr)  opal_atomic_load((opal_atomic_int_t *)(addr))
+    #define xhc_atomic_store_int(addr, val)                                           \
+        opal_atomic_store((opal_atomic_int_t *)(addr), (val))
 
-    #define xhc_atomic_load_size_t(addr) __atomic_load_n(addr, __ATOMIC_RELAXED)
-    #define xhc_atomic_store_size_t(addr, val) __atomic_store_n(addr, val, __ATOMIC_RELAXED)
+    #define xhc_atomic_load_size_t(addr) opal_atomic_load((opal_atomic_size_t *)(addr))
+    #define xhc_atomic_store_size_t(addr, val)                                        \
+        opal_atomic_store((opal_atomic_size_t *)(addr), (val))
 #else
     #define xhc_atomic_load_int(addr) (*(addr))
     #define xhc_atomic_store_int(addr, val) (*(addr) = (val))
