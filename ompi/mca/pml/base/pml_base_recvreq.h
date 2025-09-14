@@ -105,6 +105,11 @@ OMPI_DECLSPEC OBJ_CLASS_DECLARATION(mca_pml_base_recv_request_t);
                                                                                 \
         (request)->req_base.req_ompi.req_complete = REQUEST_PENDING;            \
         (request)->req_base.req_ompi.req_state = OMPI_REQUEST_ACTIVE;           \
+        void* pending_tmp = REQUEST_CB_COMPLETED;                               \
+        OPAL_THREAD_COMPARE_EXCHANGE_STRONG_PTR(                                \
+            &((request)->req_base.req_ompi.req_complete_cb),                    \
+            &pending_tmp,                                                       \
+            REQUEST_CB_PENDING);                                                \
     } while (0)
 
 /**
