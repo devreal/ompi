@@ -326,9 +326,9 @@ ompi_osc_sm_put_with_notify(const void *origin_addr,
 
     remote_address = ((char*) (module->bases[target])) + module->disp_units[target] * target_disp;
 
-    ret = ompi_datatype_sndrcv(remote_address, target_count, target_dt,
-                               origin_addr, origin_count, origin_dt);
-    // TODO: do the same for put_with_notify
+    ret = ompi_datatype_sndrcv((void *)origin_addr, origin_count, origin_dt,
+                               remote_address, target_count, target_dt);
+
     opal_atomic_rmb();
     opal_atomic_add(&module->notify_counters[target][notify], 1);
 
