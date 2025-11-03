@@ -90,7 +90,9 @@ ompi_osc_sm_module_t ompi_osc_sm_module_template = {
         .osc_get_accumulate = ompi_osc_sm_get_accumulate,
 
         .osc_rput = ompi_osc_sm_rput,
+        .osc_rput_with_notify = ompi_osc_sm_rput_with_notify,
         .osc_rget = ompi_osc_sm_rget,
+        .osc_rget_with_notify = ompi_osc_sm_rget_with_notify,
         .osc_raccumulate = ompi_osc_sm_raccumulate,
         .osc_rget_accumulate = ompi_osc_sm_rget_accumulate,
 
