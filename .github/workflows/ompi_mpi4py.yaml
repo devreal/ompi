@@ -34,7 +34,7 @@ jobs:
 
     - name: Install depencencies
       run:  sudo apt-get install -y -q
-              libnuma-dev
+              libnuma-dev libasan
       if:   ${{ runner.os == 'Linux' }}
 
     - name: Checkout Open MPI
