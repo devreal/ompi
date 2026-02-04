@@ -70,8 +70,6 @@ ompi_osc_sm_component_t mca_osc_sm_component = {
 MCA_BASE_COMPONENT_INIT(ompi, osc, sm)
 
 
-// TODO: extend the struct and add pointers to put/get_with_notify functions
-// TODO: extend it to rput/rget_with_notify as well
 ompi_osc_sm_module_t ompi_osc_sm_module_template = {
     {
         .osc_win_shared_query = ompi_osc_sm_shared_query,
@@ -81,14 +79,18 @@ ompi_osc_sm_module_t ompi_osc_sm_module_template = {
         .osc_free = ompi_osc_sm_free,
 
         .osc_put = ompi_osc_sm_put,
+        .osc_put_notify = ompi_osc_sm_put_notify,
         .osc_get = ompi_osc_sm_get,
+        .osc_get_notify = ompi_osc_sm_get_notify,
         .osc_accumulate = ompi_osc_sm_accumulate,
         .osc_compare_and_swap = ompi_osc_sm_compare_and_swap,
         .osc_fetch_and_op = ompi_osc_sm_fetch_and_op,
         .osc_get_accumulate = ompi_osc_sm_get_accumulate,
 
         .osc_rput = ompi_osc_sm_rput,
+        .osc_rput_notify = ompi_osc_sm_rput_notify,
         .osc_rget = ompi_osc_sm_rget,
+        .osc_rget_notify = ompi_osc_sm_rget_notify,
         .osc_raccumulate = ompi_osc_sm_raccumulate,
         .osc_rget_accumulate = ompi_osc_sm_rget_accumulate,
 
@@ -253,12 +255,17 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->posts = calloc (1, sizeof(module->posts[0]) + sizeof (module->posts[0][0]));
         if (NULL == module->posts) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
         module->posts[0] = (osc_sm_post_atomic_type_t *) (module->posts + 1);
+
+        /* allocate notify counters for single process case */
+        module->notify_counters = calloc(OSC_SM_MAX_NOTIFY_COUNTERS, sizeof(uint64_t));
+        if (NULL == module->notify_counters) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
     } else {
         unsigned long total, *rbuf;
         int i, flag;
         size_t pagesize;
         size_t state_size;
         size_t posts_size, post_size = (comm_size + OSC_SM_POST_MASK) / (OSC_SM_POST_MASK + 1);
+        size_t notify_counters_size;
         size_t data_base_size;
 
         opal_output_verbose(MCA_BASE_VERBOSE_DEBUG, ompi_osc_base_framework.framework_output,
@@ -314,7 +321,9 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         state_size += OPAL_ALIGN_PAD_AMOUNT(state_size, 64);
         posts_size = comm_size * post_size * sizeof (module->posts[0][0]);
         posts_size += OPAL_ALIGN_PAD_AMOUNT(posts_size, 64);
-        data_base_size = state_size + posts_size;
+        notify_counters_size = OSC_SM_MAX_NOTIFY_COUNTERS * sizeof(uint64_t);
+        notify_counters_size += OPAL_ALIGN_PAD_AMOUNT(notify_counters_size, 64);
+        data_base_size = state_size + posts_size + notify_counters_size;
         data_base_size += OPAL_ALIGN_PAD_AMOUNT(data_base_size, pagesize);
         if (0 == ompi_comm_rank (module->comm)) {
             char *data_file;
@@ -374,6 +383,12 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->posts[0] = (osc_sm_post_atomic_type_t *) (module->segment_base);
         module->global_state = (ompi_osc_sm_global_state_t *) (module->posts[0] + comm_size * post_size);
         module->node_states = (ompi_osc_sm_node_state_t *) (module->global_state + 1);
+
+        /* set up notify counters in shared memory after node_states */
+        module->notify_counters = (uint64_t *) ((char *)(module->node_states + comm_size) +
+                                   OPAL_ALIGN_PAD_AMOUNT((uintptr_t)(module->node_states + comm_size), 64));
+        /* zero out notify counters */
+        memset(module->notify_counters, 0, OSC_SM_MAX_NOTIFY_COUNTERS * sizeof(uint64_t));
 
         for (i = 0, total = data_base_size ; i < comm_size ; ++i) {
             if (i > 0) {
@@ -553,6 +568,7 @@ ompi_osc_sm_free(struct ompi_win_t *win)
                                           module->comm->c_coll->coll_barrier_module);
 
         opal_shmem_segment_detach (&module->seg_ds);
+        /* notify_counters points into shared memory segment, no separate free needed */
     } else {
         free(module->node_states);
         free(module->global_state);
@@ -560,6 +576,8 @@ ompi_osc_sm_free(struct ompi_win_t *win)
             mca_mpool_base_default_module->mpool_free(mca_mpool_base_default_module,
                                                       module->bases[0]);
         }
+        /* free notify_counters for single process case */
+        free(module->notify_counters);
     }
     free(module->disp_units);
     free(module->outstanding_locks);
