@@ -22,6 +22,7 @@ typedef uint64_t osc_sm_post_type_t;
 typedef opal_atomic_uint64_t osc_sm_post_atomic_type_t;
 #define OSC_SM_POST_BITS 6
 #define OSC_SM_POST_MASK 0x3f
+#define OSC_SM_MAX_NOTIFY_COUNTERS 16
 
 /* data shared across all peers */
 struct ompi_osc_sm_global_state_t {
@@ -47,6 +48,9 @@ struct ompi_osc_sm_node_state_t {
     opal_atomic_int32_t complete_count;
     ompi_osc_sm_lock_t lock;
     opal_atomic_lock_t accumulate_lock;
+    uint32_t notify_counter_count;
+    uint64_t notify_counter_offset; /* offset from segment_base, not raw pointer */
+
 };
 typedef struct ompi_osc_sm_node_state_t ompi_osc_sm_node_state_t;
 
@@ -79,7 +83,7 @@ struct ompi_osc_sm_module_t {
     size_t *sizes;
     void **bases;
     ptrdiff_t *disp_units;
-    uint64_t **notify_counters;
+    uint64_t *notify_counters;
 
 
     ompi_group_t *start_group;
@@ -107,7 +111,6 @@ int ompi_osc_sm_detach(struct ompi_win_t *win, const void *base);
 
 int ompi_osc_sm_free(struct ompi_win_t *win);
 
-// TODO: add put/get_with_notify prototypes
 
 int ompi_osc_sm_put(const void *origin_addr,
                           size_t origin_count,
@@ -118,6 +121,16 @@ int ompi_osc_sm_put(const void *origin_addr,
                           struct ompi_datatype_t *target_dt,
                           struct ompi_win_t *win);
 
+ int ompi_osc_sm_put_notify(const void *origin_addr,
+                           size_t origin_count,
+                           struct ompi_datatype_t *origin_dt,
+                           int target,
+                           ptrdiff_t target_disp,
+                           size_t target_count,
+                           struct ompi_datatype_t *target_dt,
+                           int notify,
+                           struct ompi_win_t *win);
+ 
 int ompi_osc_sm_get(void *origin_addr,
                           size_t origin_count,
                           struct ompi_datatype_t *origin_dt,
@@ -127,6 +140,16 @@ int ompi_osc_sm_get(void *origin_addr,
                           struct ompi_datatype_t *target_dt,
                           struct ompi_win_t *win);
 
+int ompi_osc_sm_get_notify(void *origin_addr,
+                          size_t origin_count,
+                          struct ompi_datatype_t *origin_dt,
+                          int target,
+                          ptrdiff_t target_disp,
+                          size_t target_count,
+                          struct ompi_datatype_t *target_dt,
+                          int notify,
+                          struct ompi_win_t *win);
+ 
 int ompi_osc_sm_accumulate(const void *origin_addr,
                                  size_t origin_count,
                                  struct ompi_datatype_t *origin_dt,
@@ -176,6 +199,17 @@ int ompi_osc_sm_rput(const void *origin_addr,
                            struct ompi_win_t *win,
                            struct ompi_request_t **request);
 
+int ompi_osc_sm_rput_notify(const void *origin_addr,
+                          size_t origin_count,
+                          struct ompi_datatype_t *origin_dt,
+                          int target,
+                          ptrdiff_t target_disp,
+                          size_t target_count,
+                          struct ompi_datatype_t *target_dt,
+                          int notify,
+                          struct ompi_win_t *win,
+                          struct ompi_request_t **request);
+
 int ompi_osc_sm_rget(void *origin_addr,
                            size_t origin_count,
                            struct ompi_datatype_t *origin_dt,
@@ -185,6 +219,17 @@ int ompi_osc_sm_rget(void *origin_addr,
                            struct ompi_datatype_t *target_dt,
                            struct ompi_win_t *win,
                            struct ompi_request_t **request);
+
+int ompi_osc_sm_rget_notify(void *origin_addr,
+                          size_t origin_count,
+                          struct ompi_datatype_t *origin_dt,
+                          int target,
+                          ptrdiff_t target_disp,
+                          size_t target_count,
+                          struct ompi_datatype_t *target_dt,
+                          int notify,
+                          struct ompi_win_t *win,
+                          struct ompi_request_t **request);
 
 int ompi_osc_sm_raccumulate(const void *origin_addr,
                                   size_t origin_count,

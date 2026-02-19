@@ -70,8 +70,6 @@ ompi_osc_sm_component_t mca_osc_sm_component = {
 MCA_BASE_COMPONENT_INIT(ompi, osc, sm)
 
 
-// TODO: extend the struct and add pointers to put/get_with_notify functions
-// TODO: extend it to rput/rget_with_notify as well
 ompi_osc_sm_module_t ompi_osc_sm_module_template = {
     {
         .osc_win_shared_query = ompi_osc_sm_shared_query,
@@ -81,14 +79,18 @@ ompi_osc_sm_module_t ompi_osc_sm_module_template = {
         .osc_free = ompi_osc_sm_free,
 
         .osc_put = ompi_osc_sm_put,
+        .osc_put_notify = ompi_osc_sm_put_notify,
         .osc_get = ompi_osc_sm_get,
+        .osc_get_notify = ompi_osc_sm_get_notify,
         .osc_accumulate = ompi_osc_sm_accumulate,
         .osc_compare_and_swap = ompi_osc_sm_compare_and_swap,
         .osc_fetch_and_op = ompi_osc_sm_fetch_and_op,
         .osc_get_accumulate = ompi_osc_sm_get_accumulate,
 
         .osc_rput = ompi_osc_sm_rput,
+        .osc_rput_notify = ompi_osc_sm_rput_notify,
         .osc_rget = ompi_osc_sm_rget,
+        .osc_rget_notify = ompi_osc_sm_rget_notify,
         .osc_raccumulate = ompi_osc_sm_raccumulate,
         .osc_rget_accumulate = ompi_osc_sm_rget_accumulate,
 
@@ -253,12 +255,19 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->posts = calloc (1, sizeof(module->posts[0]) + sizeof (module->posts[0][0]));
         if (NULL == module->posts) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
         module->posts[0] = (osc_sm_post_atomic_type_t *) (module->posts + 1);
+
+        /* allocate notify counters for single process case */
+        module->notify_counters = calloc(OSC_SM_MAX_NOTIFY_COUNTERS, sizeof(uint64_t));
+        if (NULL == module->notify_counters) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
+        module->node_states[0].notify_counter_count = OSC_SM_MAX_NOTIFY_COUNTERS;
+        module->node_states[0].notify_counter_offset = 0;
     } else {
-        unsigned long total, *rbuf;
+        unsigned long total, total_counters, gather_values[2], *rbuf;
         int i, flag;
         size_t pagesize;
         size_t state_size;
         size_t posts_size, post_size = (comm_size + OSC_SM_POST_MASK) / (OSC_SM_POST_MASK + 1);
+        size_t notify_counters_size;
         size_t data_base_size;
 
         opal_output_verbose(MCA_BASE_VERBOSE_DEBUG, ompi_osc_base_framework.framework_output,
@@ -267,7 +276,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         /* get the pagesize */
         pagesize = opal_getpagesize();
 
-        rbuf = malloc(sizeof(unsigned long) * comm_size);
+        rbuf = malloc(sizeof(unsigned long) * comm_size * 2 );
         if (NULL == rbuf) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
 
         /* Note that the alloc_shared_noncontig info key only has
@@ -291,9 +300,10 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
                                 "allocating window using contiguous strategy");
         }
 
-        total = size;
-        ret = module->comm->c_coll->coll_allgather(&total, 1, MPI_UNSIGNED_LONG,
-                                                  rbuf, 1, MPI_UNSIGNED_LONG,
+        gather_values[0] = size;
+        gather_values[1] = OSC_SM_MAX_NOTIFY_COUNTERS;
+        ret = module->comm->c_coll->coll_allgather(gather_values, 2, MPI_UNSIGNED_LONG,
+                                                  rbuf, 2, MPI_UNSIGNED_LONG,
                                                   module->comm,
                                                   module->comm->c_coll->coll_allgather_module);
         if (OMPI_SUCCESS != ret) {
@@ -302,8 +312,10 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         }
 
         total = 0;
+        total_counters = 0;
         for (i = 0 ; i < comm_size ; ++i) {
-            total += rbuf[i];
+            total += rbuf[2 * i];
+            total_counters += rbuf[2 * i + 1];
             if (module->noncontig) {
                 total += OPAL_ALIGN_PAD_AMOUNT(total, pagesize);
             }
@@ -314,7 +326,9 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         state_size += OPAL_ALIGN_PAD_AMOUNT(state_size, 64);
         posts_size = comm_size * post_size * sizeof (module->posts[0][0]);
         posts_size += OPAL_ALIGN_PAD_AMOUNT(posts_size, 64);
-        data_base_size = state_size + posts_size;
+        notify_counters_size = total_counters * sizeof(uint64_t);
+        notify_counters_size += OPAL_ALIGN_PAD_AMOUNT(notify_counters_size, 64);
+        data_base_size = state_size + posts_size + notify_counters_size;
         data_base_size += OPAL_ALIGN_PAD_AMOUNT(data_base_size, pagesize);
         if (0 == ompi_comm_rank (module->comm)) {
             char *data_file;
@@ -375,15 +389,27 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->global_state = (ompi_osc_sm_global_state_t *) (module->posts[0] + comm_size * post_size);
         module->node_states = (ompi_osc_sm_node_state_t *) (module->global_state + 1);
 
-        for (i = 0, total = data_base_size ; i < comm_size ; ++i) {
+        /* set up notify counters in shared memory after node_states */
+        module->notify_counters = (uint64_t *) ((char *)(module->node_states + comm_size) +
+                                   OPAL_ALIGN_PAD_AMOUNT((uintptr_t)(module->node_states + comm_size), 64));
+        /* zero out notify counters */
+        memset(module->notify_counters, 0, total_counters * sizeof(uint64_t));
+
+        for (i = 0, total = data_base_size, total_counters = 0 ; i < comm_size ; ++i) {
             if (i > 0) {
                 module->posts[i] = module->posts[i - 1] + post_size;
             }
 
-            module->sizes[i] = rbuf[i];
+            module->node_states[i].notify_counter_count = (uint32_t) rbuf[2 * i + 1];
+            module->node_states[i].notify_counter_offset =
+                (uint64_t) ((char *) (module->notify_counters + total_counters) -
+                            (char *) module->segment_base);
+            total_counters += rbuf[2 * i + 1];
+
+            module->sizes[i] = rbuf[2 * i];
             if (module->sizes[i] || !module->noncontig) {
                 module->bases[i] = ((char *) module->segment_base) + total;
-                total += rbuf[i];
+                total += rbuf[2 * i];
                 if (module->noncontig) {
                     total += OPAL_ALIGN_PAD_AMOUNT(total, pagesize);
                 }
@@ -397,7 +423,8 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
 
     /* initialize my state shared */
     module->my_node_state = &module->node_states[ompi_comm_rank(module->comm)];
-    memset (module->my_node_state, 0, sizeof(*module->my_node_state));
+    module->my_node_state->complete_count = 0;
+    memset (&module->my_node_state->lock, 0, sizeof(module->my_node_state->lock));
 
     *base = module->bases[ompi_comm_rank(module->comm)];
 
@@ -553,6 +580,7 @@ ompi_osc_sm_free(struct ompi_win_t *win)
                                           module->comm->c_coll->coll_barrier_module);
 
         opal_shmem_segment_detach (&module->seg_ds);
+        /* notify_counters points into shared memory segment, no separate free needed */
     } else {
         free(module->node_states);
         free(module->global_state);
@@ -560,6 +588,8 @@ ompi_osc_sm_free(struct ompi_win_t *win)
             mca_mpool_base_default_module->mpool_free(mca_mpool_base_default_module,
                                                       module->bases[0]);
         }
+        /* free notify_counters for single process case */
+        free(module->notify_counters);
     }
     free(module->disp_units);
     free(module->outstanding_locks);
