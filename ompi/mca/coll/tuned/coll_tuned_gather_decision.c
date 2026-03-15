@@ -130,7 +130,8 @@ ompi_coll_tuned_gather_intra_do_this(const void *sbuf, size_t scount,
                                      int root,
                                      struct ompi_communicator_t *comm,
                                      mca_coll_base_module_t *module,
-                                     int algorithm, int faninout, int segsize)
+                                     int algorithm, int faninout, int segsize,
+                                     mca_allocator_base_module_t *allocator)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "coll:tuned:gather_intra_do_this selected algorithm %d topo faninout %d segsize %d",
@@ -148,7 +149,7 @@ ompi_coll_tuned_gather_intra_do_this(const void *sbuf, size_t scount,
     case (2):
         return ompi_coll_base_gather_intra_binomial(sbuf, scount, sdtype,
                                                     rbuf, rcount, rdtype,
-                                                    root, comm, module);
+                                                    root, comm, module, allocator);
     case (3):
         return ompi_coll_base_gather_intra_linear_sync(sbuf, scount, sdtype,
                                                        rbuf, rcount, rdtype,
