@@ -25,6 +25,8 @@
 
 #include "mpi.h"
 #include "ompi/constants.h"
+#include "opal/mca/accelerator/accelerator.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "ompi/datatype/ompi_datatype.h"
 #include "ompi/communicator/communicator.h"
 #include "ompi/mca/coll/base/base.h"
@@ -63,12 +65,16 @@ ompi_coll_tuned_allreduce_intra_dec_dynamic (const void *sbuf, void *rbuf, size_
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "ompi_coll_tuned_allreduce_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[ALLREDUCE].algorithm) {
         return ompi_coll_tuned_allreduce_intra_do_this(sbuf, rbuf, count, dtype, op, comm, module,
                                                        tuned_module->user_forced[ALLREDUCE].algorithm,
                                                        tuned_module->user_forced[ALLREDUCE].tree_fanout,
-                                                       tuned_module->user_forced[ALLREDUCE].segsize);
+                                                       tuned_module->user_forced[ALLREDUCE].segsize,
+                                                       NULL);
     }
 
     /* check to see if we have some filebased rules */
@@ -87,7 +93,7 @@ ompi_coll_tuned_allreduce_intra_dec_dynamic (const void *sbuf, void *rbuf, size_
             /* we have found a valid choice from the file based rules for this message size */
             return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
                                                             comm, module,
-                                                            alg, faninout, segsize);
+                                                            alg, faninout, segsize, NULL);
         } /* found a method */
     } /*end if any com rules to check */
 
@@ -317,6 +323,9 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCE].algorithm) {
         return ompi_coll_tuned_reduce_intra_do_this(sbuf, rbuf, count, dtype,
@@ -324,7 +333,8 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
                                                     tuned_module->user_forced[REDUCE].algorithm,
                                                     tuned_module->user_forced[REDUCE].chain_fanout,
                                                     tuned_module->user_forced[REDUCE].segsize,
-                                                    tuned_module->user_forced[REDUCE].max_requests);
+                                                    tuned_module->user_forced[REDUCE].max_requests,
+                                                    NULL);
     }
 
     /* check to see if we have some filebased rules */
@@ -345,7 +355,7 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
             return  ompi_coll_tuned_reduce_intra_do_this (sbuf, rbuf, count, dtype,
                                                           op, root, comm, module,
                                                           alg, faninout,
-                                                          segsize, max_requests);
+                                                          segsize, max_requests, NULL);
         } /* found a method */
     } /*end if any com rules to check */
 
@@ -374,13 +384,17 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_dynamic(const void *sbuf, void *rbu
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTER].algorithm) {
         return ompi_coll_tuned_reduce_scatter_intra_do_this(sbuf, rbuf, rcounts, dtype,
                                                             op, comm, module,
                                                             tuned_module->user_forced[REDUCESCATTER].algorithm,
                                                             tuned_module->user_forced[REDUCESCATTER].chain_fanout,
-                                                            tuned_module->user_forced[REDUCESCATTER].segsize);
+                                                            tuned_module->user_forced[REDUCESCATTER].segsize,
+                                                            NULL);
     }
 
     /* check to see if we have some filebased rules */
@@ -401,7 +415,7 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_dynamic(const void *sbuf, void *rbu
             /* we have found a valid choice from the file based rules for this message size */
             return  ompi_coll_tuned_reduce_scatter_intra_do_this (sbuf, rbuf, rcounts, dtype,
                                                                   op, comm, module,
-                                                                  alg, faninout, segsize);
+                                                                  alg, faninout, segsize, NULL);
         } /* found a method */
     } /*end if any com rules to check */
 
@@ -430,13 +444,17 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_dynamic(const void *sbuf, voi
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_block_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm) {
         return ompi_coll_tuned_reduce_scatter_block_intra_do_this(sbuf, rbuf, rcount, dtype,
                                                                   op, comm, module,
                                                                   tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm,
                                                                   tuned_module->user_forced[REDUCESCATTERBLOCK].chain_fanout,
-                                                                  tuned_module->user_forced[REDUCESCATTERBLOCK].segsize);
+                                                                  tuned_module->user_forced[REDUCESCATTERBLOCK].segsize,
+                                                                  NULL);
     }
 
     /* check to see if we have some filebased rules */
@@ -456,7 +474,7 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_dynamic(const void *sbuf, voi
             /* we have found a valid choice from the file based rules for this message size */
             return  ompi_coll_tuned_reduce_scatter_block_intra_do_this (sbuf, rbuf, rcount, dtype,
                                                                         op, comm, module,
-                                                                        alg, faninout, segsize);
+                                                                        alg, faninout, segsize, NULL);
         } /* found a method */
     } /* end if any com rules to check */
 
@@ -600,9 +618,22 @@ int ompi_coll_tuned_gather_intra_dec_dynamic(const void *sbuf, size_t scount,
                                              mca_coll_base_module_t *module)
 {
     mca_coll_tuned_module_t *tuned_module = (mca_coll_tuned_module_t*) module;
+    mca_allocator_base_module_t *allocator = NULL;
 
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_gather_intra_dec_dynamic"));
+
+    /* Scratch buffer is used for data movement only (no ompi_op_reduce).
+     * Use device allocator when user buffers are on device. */
+    {
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+    }
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[GATHER].algorithm) {
@@ -611,7 +642,8 @@ int ompi_coll_tuned_gather_intra_dec_dynamic(const void *sbuf, size_t scount,
                                                     root, comm, module,
                                                     tuned_module->user_forced[GATHER].algorithm,
                                                     tuned_module->user_forced[GATHER].tree_fanout,
-                                                    tuned_module->user_forced[GATHER].segsize);
+                                                    tuned_module->user_forced[GATHER].segsize,
+                                                    allocator);
     }
 
     /**
@@ -633,7 +665,7 @@ int ompi_coll_tuned_gather_intra_dec_dynamic(const void *sbuf, size_t scount,
             return ompi_coll_tuned_gather_intra_do_this (sbuf, scount, sdtype,
                                                          rbuf, rcount, rdtype,
                                                          root, comm, module,
-                                                         alg, faninout, segsize);
+                                                         alg, faninout, segsize, allocator);
         } /* found a method */
     } /*end if any com rules to check */
 
@@ -703,11 +735,15 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_exscan_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[EXSCAN].algorithm) {
         return ompi_coll_tuned_exscan_intra_do_this(sbuf, rbuf, count, dtype,
                                                     op, comm, module,
-                                                    tuned_module->user_forced[EXSCAN].algorithm);
+                                                    tuned_module->user_forced[EXSCAN].algorithm,
+                                                    NULL);
     }
 
     /**
@@ -728,7 +764,7 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
             /* we have found a valid choice from the file based rules for this message size */
             return ompi_coll_tuned_exscan_intra_do_this (sbuf, rbuf, count, dtype,
                                                          op, comm, module,
-                                                         alg);
+                                                         alg, NULL);
         } /* found a method */
     } /*end if any com rules to check */
 
@@ -747,11 +783,15 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_scan_intra_dec_dynamic"));
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator (NULL). */
+
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[SCAN].algorithm) {
         return ompi_coll_tuned_scan_intra_do_this(sbuf, rbuf, count, dtype,
                                                   op, comm, module,
-                                                  tuned_module->user_forced[SCAN].algorithm);
+                                                  tuned_module->user_forced[SCAN].algorithm,
+                                                  NULL);
     }
 
     /**
@@ -772,7 +812,7 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
             /* we have found a valid choice from the file based rules for this message size */
             return ompi_coll_tuned_scan_intra_do_this (sbuf, rbuf, count, dtype,
                                                        op, comm, module,
-                                                       alg);
+                                                       alg, NULL);
         } /* found a method */
     } /*end if any com rules to check */
 

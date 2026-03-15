@@ -29,6 +29,8 @@
 
 #include "mpi.h"
 #include "opal/util/bit_ops.h"
+#include "opal/mca/accelerator/accelerator.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "ompi/datatype/ompi_datatype.h"
 #include "ompi/communicator/communicator.h"
 #include "ompi/mca/coll/coll.h"
@@ -214,8 +216,10 @@ ompi_coll_tuned_allreduce_intra_dec_fixed(const void *sbuf, void *rbuf, size_t c
         }
     }
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator. */
     return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
-                                                    comm, module, alg, 0, 0);
+                                                    comm, module, alg, 0, 0, NULL);
 }
 
 /*
@@ -885,10 +889,12 @@ int ompi_coll_tuned_reduce_intra_dec_fixed( const void *sendbuf, void *recvbuf,
         }
     }
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator. */
     int faninout = 2;
     return  ompi_coll_tuned_reduce_intra_do_this (sendbuf, recvbuf, count, datatype,
                                                   op, root, comm, module,
-                                                  alg, faninout, 0, 0);
+                                                  alg, faninout, 0, 0, NULL);
 }
 
 /*
@@ -1035,9 +1041,11 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_fixed( const void *sbuf, void *rbuf
         }
     }
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator. */
     return  ompi_coll_tuned_reduce_scatter_intra_do_this (sbuf, rbuf, rcounts, dtype,
                                                           op, comm, module,
-                                                          alg, 0, 0);
+                                                          alg, 0, 0, NULL);
 }
 
 /*
@@ -1156,9 +1164,11 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(const void *sbuf, void 
         }
     }
 
+    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
+     * reduction is not yet supported, so always use the host allocator. */
     return  ompi_coll_tuned_reduce_scatter_block_intra_do_this (sbuf, rbuf, rcount, dtype,
                                                                 op, comm, module,
-                                                                alg, 0, 0);
+                                                                alg, 0, 0, NULL);
 }
 
 /*
@@ -1468,6 +1478,7 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
 {
     int communicator_size, alg, rank;
     size_t dsize, total_dsize;
+    mca_allocator_base_module_t *allocator = NULL;
 
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_gather_intra_dec_fixed"));
@@ -1532,10 +1543,21 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
         alg = 2;
     }
 
+    /* Scratch buffer is used for data movement only (no ompi_op_reduce).
+     * Use device allocator when user buffers are on device. */
+    {
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+    }
     return ompi_coll_tuned_gather_intra_do_this (sbuf, scount, sdtype,
                                                  rbuf, rcount, rdtype,
                                                  root, comm, module,
-                                                 alg, 0, 0);
+                                                 alg, 0, 0, allocator);
 }
 
 /*

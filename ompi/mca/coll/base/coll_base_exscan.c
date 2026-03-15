@@ -142,7 +142,7 @@ ompi_coll_base_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
 int ompi_coll_base_exscan_intra_recursivedoubling(
     const void *sendbuf, void *recvbuf, size_t count, struct ompi_datatype_t *datatype,
     struct ompi_op_t *op, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module)
+    mca_coll_base_module_t *module, mca_allocator_base_module_t *allocator)
 {
     int err = MPI_SUCCESS;
     char *tmpsend_raw = NULL, *tmprecv_raw = NULL;
@@ -158,8 +158,8 @@ int ompi_coll_base_exscan_intra_recursivedoubling(
 
     ptrdiff_t dsize, gap;
     dsize = opal_datatype_span(&datatype->super, count, &gap);
-    tmpsend_raw = malloc(dsize);
-    tmprecv_raw = malloc(dsize);
+    tmpsend_raw = COLL_BASE_ALLOC(allocator, dsize);
+    tmprecv_raw = COLL_BASE_ALLOC(allocator, dsize);
     if (NULL == tmpsend_raw || NULL == tmprecv_raw) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
         goto cleanup_and_return;
@@ -215,9 +215,7 @@ int ompi_coll_base_exscan_intra_recursivedoubling(
     }
 
 cleanup_and_return:
-    if (NULL != tmpsend_raw)
-        free(tmpsend_raw);
-    if (NULL != tmprecv_raw)
-        free(tmprecv_raw);
+    COLL_BASE_FREE(allocator, tmpsend_raw);
+    COLL_BASE_FREE(allocator, tmprecv_raw);
     return err;
 }

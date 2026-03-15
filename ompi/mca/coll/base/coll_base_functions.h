@@ -36,6 +36,16 @@
 #include "ompi/mca/coll/coll.h"
 #include "ompi/info/info.h"
 #include "ompi/request/request.h"
+#include "opal/mca/allocator/allocator.h"
+
+/* Allocator-aware helpers for Pattern-A scratch buffers.
+ * Pass allocator=NULL to fall back to plain malloc/free. */
+#define COLL_BASE_ALLOC(allocator, size) \
+    ((allocator) ? (allocator)->alc_alloc((allocator), (size), 0) : malloc(size))
+
+#define COLL_BASE_FREE(allocator, ptr) \
+    do { if (ptr) { if (allocator) (allocator)->alc_free((allocator), (ptr)); \
+                    else free(ptr); } } while (0)
 
 /* need to include our own topo prototypes so we can malloc data on the comm correctly */
 #include "coll_base_topo.h"
@@ -206,12 +216,12 @@ int ompi_coll_base_allgatherv_intra_two_procs(ALLGATHERV_ARGS);
 
 /* All Reduce */
 int ompi_coll_base_allreduce_intra_nonoverlapping(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_recursivedoubling(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_ring(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_ring_segmented(ALLREDUCE_ARGS, uint32_t segsize);
+int ompi_coll_base_allreduce_intra_recursivedoubling(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_allreduce_intra_ring(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_allreduce_intra_ring_segmented(ALLREDUCE_ARGS, uint32_t segsize, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_allreduce_intra_basic_linear(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_redscat_allgather(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_allgather_reduce(ALLREDUCE_ARGS);
+int ompi_coll_base_allreduce_intra_redscat_allgather(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_allreduce_intra_allgather_reduce(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
 
 /* AlltoAll */
 int ompi_coll_base_alltoall_intra_pairwise(ALLTOALL_ARGS);
@@ -255,44 +265,42 @@ int ompi_coll_base_bcast_intra_scatter_allgather(BCAST_ARGS, uint32_t segsize);
 int ompi_coll_base_bcast_intra_scatter_allgather_ring(BCAST_ARGS, uint32_t segsize);
 
 /* Exscan */
-int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS);
+int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_exscan_intra_linear(EXSCAN_ARGS);
-int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS);
 
 /* Gather */
 int ompi_coll_base_gather_intra_basic_linear(GATHER_ARGS);
-int ompi_coll_base_gather_intra_binomial(GATHER_ARGS);
+int ompi_coll_base_gather_intra_binomial(GATHER_ARGS, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_gather_intra_linear_sync(GATHER_ARGS, int first_segment_size);
 
 /* GatherV */
 
 /* Reduce */
-int ompi_coll_base_reduce_generic(REDUCE_ARGS, ompi_coll_tree_t* tree, size_t count_by_segment, int max_outstanding_reqs);
+int ompi_coll_base_reduce_generic(REDUCE_ARGS, ompi_coll_tree_t* tree, size_t count_by_segment, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_reduce_intra_basic_linear(REDUCE_ARGS);
-int ompi_coll_base_reduce_intra_chain(REDUCE_ARGS, uint32_t segsize, int fanout, int max_outstanding_reqs );
-int ompi_coll_base_reduce_intra_pipeline(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs );
-int ompi_coll_base_reduce_intra_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs );
-int ompi_coll_base_reduce_intra_binomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs );
-int ompi_coll_base_reduce_intra_in_order_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs );
-int ompi_coll_base_reduce_intra_redscat_gather(REDUCE_ARGS);
-int ompi_coll_base_reduce_intra_knomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, int radix);
+int ompi_coll_base_reduce_intra_chain(REDUCE_ARGS, uint32_t segsize, int fanout, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_pipeline(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_binomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_in_order_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_redscat_gather(REDUCE_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_knomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, int radix, mca_allocator_base_module_t *allocator);
 
 /* Reduce_scatter */
-int ompi_coll_base_reduce_scatter_intra_nonoverlapping(REDUCESCATTER_ARGS);
-int ompi_coll_base_reduce_scatter_intra_basic_recursivehalving(REDUCESCATTER_ARGS);
-int ompi_coll_base_reduce_scatter_intra_ring(REDUCESCATTER_ARGS);
-int ompi_coll_base_reduce_scatter_intra_butterfly(REDUCESCATTER_ARGS);
+int ompi_coll_base_reduce_scatter_intra_nonoverlapping(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_intra_basic_recursivehalving(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_intra_ring(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_intra_butterfly(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
 
 /* Reduce_scatter_block */
-int ompi_coll_base_reduce_scatter_block_basic_linear(REDUCESCATTERBLOCK_ARGS);
-int ompi_coll_base_reduce_scatter_block_intra_recursivedoubling(REDUCESCATTERBLOCK_ARGS);
-int ompi_coll_base_reduce_scatter_block_intra_recursivehalving(REDUCESCATTERBLOCK_ARGS);
-int ompi_coll_base_reduce_scatter_block_intra_butterfly(REDUCESCATTERBLOCK_ARGS);
+int ompi_coll_base_reduce_scatter_block_basic_linear(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_block_intra_recursivedoubling(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_block_intra_recursivehalving(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_block_intra_butterfly(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
 
 /* Scan */
-int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS);
+int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_scan_intra_linear(SCAN_ARGS);
-int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS);
 
 /* Scatter */
 int ompi_coll_base_scatter_intra_basic_linear(SCATTER_ARGS);

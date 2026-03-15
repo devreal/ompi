@@ -32,6 +32,19 @@ extern int mca_coll_acoll_without_smsc;
 extern int mca_coll_acoll_smsc_use_sr_buf;
 extern int mca_coll_acoll_barrier_algo;
 
+/* Wrapper so recursivedoubling can be stored as a module function pointer
+ * despite having gained an allocator parameter in coll_base_functions.h. */
+static int
+ompi_coll_acoll_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf, size_t count,
+                                                  struct ompi_datatype_t *dtype,
+                                                  struct ompi_op_t *op,
+                                                  struct ompi_communicator_t *comm,
+                                                  mca_coll_base_module_t *module)
+{
+    return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype, op,
+                                                            comm, module, NULL);
+}
+
 /*
  * Hybrid backoff spin-wait with adaptive progress calls.
  * Optimized for intra-node shared memory synchronization.
@@ -438,7 +451,7 @@ static inline int mca_coll_acoll_comm_split_init(ompi_communicator_t *comm,
     int rank = ompi_comm_rank(comm);
 
     (comm)->c_coll->coll_allgather = ompi_coll_base_allgather_intra_ring;
-    (comm)->c_coll->coll_allreduce = ompi_coll_base_allreduce_intra_recursivedoubling;
+    (comm)->c_coll->coll_allreduce = ompi_coll_acoll_allreduce_intra_recursivedoubling;
     (comm)->c_coll->coll_bcast = ompi_coll_base_bcast_intra_basic_linear;
     if (!subc->initialized) {
         OBJ_CONSTRUCT(&comm_info, opal_info_t);
@@ -536,14 +549,14 @@ static inline int mca_coll_acoll_comm_split_init(ompi_communicator_t *comm,
         coll_bcast_loc = (subc->local_comm)->c_coll->coll_bcast;
         (subc->local_comm)->c_coll->coll_allgather = ompi_coll_base_allgather_intra_ring;
         (subc->local_comm)->c_coll->coll_allreduce
-            = ompi_coll_base_allreduce_intra_recursivedoubling;
+            = ompi_coll_acoll_allreduce_intra_recursivedoubling;
         (subc->local_comm)->c_coll->coll_bcast = ompi_coll_base_bcast_intra_basic_linear;
         coll_allreduce_soc = (subc->socket_comm)->c_coll->coll_allreduce;
         coll_allgather_soc = (subc->socket_comm)->c_coll->coll_allgather;
         coll_bcast_soc = (subc->socket_comm)->c_coll->coll_bcast;
         (subc->socket_comm)->c_coll->coll_allgather = ompi_coll_base_allgather_intra_ring;
         (subc->socket_comm)->c_coll->coll_allreduce
-            = ompi_coll_base_allreduce_intra_recursivedoubling;
+            = ompi_coll_acoll_allreduce_intra_recursivedoubling;
         (subc->socket_comm)->c_coll->coll_bcast = ompi_coll_base_bcast_intra_basic_linear;
     }
 

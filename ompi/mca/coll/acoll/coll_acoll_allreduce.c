@@ -483,7 +483,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
     /* Falling back to recursivedoubling for non-commutative operators to be safe */
     if (!ompi_op_is_commute(op)) {
         return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype, op, comm,
-                                                                module);
+                                                                module, NULL);
     }
 
     /* Obtain the subcomms structure */
@@ -497,7 +497,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
     /* Fallback to knomial if subc is not obtained */
     if (NULL == subc) {
         return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype, op, comm,
-                                                                module);
+                                                                module, NULL);
     }
     if (!subc->initialized) {
         err = mca_coll_acoll_comm_split_init(comm, acoll_module, subc, 0);
@@ -513,7 +513,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
     if (num_nodes > 1) {
         if (total_dsize > 16384) {
             return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype, op,
-                                                                    comm, module);
+                                                                    comm, module, NULL);
         }
         int use_socket = acoll_module->use_socket != -1 ? acoll_module->use_socket : 0;
         coll_acoll_subcomms_t *soc_subc = NULL;
@@ -525,7 +525,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
         /* Validate communicator hierarchy before proceeding */
         if (NULL == soc_comm || NULL == ldr_comm) {
             return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype, op,
-                                                                    comm, module);
+                                                                    comm, module, NULL);
         }
 
         err = check_and_create_subc(soc_comm, acoll_module, &soc_subc);
@@ -573,10 +573,10 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
             if (ompi_comm_size(ldr_comm) > 1 && -1 != ldr_root) {
                 if ((MPI_IN_PLACE == sbuf)) {
                     err = ompi_coll_base_allreduce_intra_recursivedoubling(MPI_IN_PLACE, rbuf, count, dtype, op,
-                                                                           ldr_comm, module);
+                                                                           ldr_comm, module, NULL);
                 } else {
                     err = ompi_coll_base_allreduce_intra_recursivedoubling(tmp_sbuf, rbuf, count, dtype, op,
-                                                                           ldr_comm, module);
+                                                                           ldr_comm, module, NULL);
                 }
                 if (MPI_SUCCESS != err) {
                     if (NULL != inplacebuf_free) {
@@ -607,23 +607,23 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
     if (1 == num_nodes) {
         if (total_dsize < 32) {
             return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype, op,
-                                                                    comm, module);
+                                                                    comm, module, NULL);
         } else if ((total_dsize < 512) && is_opt) {
             return mca_coll_acoll_allreduce_small_msgs_h(sbuf, rbuf, count, dtype, op, comm, module,
                                                          subc, 1);
         } else if (total_dsize <= 2048) {
             return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype, op,
-                                                                    comm, module);
+                                                                    comm, module, NULL);
         } else if (total_dsize < 65536) {
             if (1 == alg) {
                 return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype,
-                                                                        op, comm, module);
+                                                                        op, comm, module, NULL);
             } else if (2 == alg) {
                 return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype,
-                                                                        op, comm, module);
+                                                                        op, comm, module, NULL);
             } else { /*3 == alg */
                 return ompi_coll_base_allreduce_intra_ring_segmented(sbuf, rbuf, count, dtype, op,
-                                                                     comm, module, 0);
+                                                                     comm, module, 0, NULL);
             }
         } else if (total_dsize < 4194304) {
             if (((0 != subc->smsc_use_sr_buf) || (subc->smsc_buf_size > 2 * total_dsize))
@@ -631,7 +631,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
                 return mca_coll_acoll_allreduce_smsc_f(sbuf, rbuf, count, dtype, op, comm, module, subc);
             } else {
                 return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype,
-                                                                        op, comm, module);
+                                                                        op, comm, module, NULL);
             }
         } else if (total_dsize <= 16777216) {
             if (((0 != subc->smsc_use_sr_buf) || (subc->smsc_buf_size > 2 * total_dsize))
@@ -640,7 +640,7 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
                 return mca_coll_acoll_bcast(rbuf, count, dtype, 0, comm, module);
             } else {
                 return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype,
-                                                                        op, comm, module);
+                                                                        op, comm, module, NULL);
             }
         } else {
             if (((0 != subc->smsc_use_sr_buf) || (subc->smsc_buf_size > 2 * total_dsize))
@@ -648,13 +648,13 @@ int mca_coll_acoll_allreduce_intra(const void *sbuf, void *rbuf, size_t count,
                 return mca_coll_acoll_allreduce_smsc_f(sbuf, rbuf, count, dtype, op, comm, module, subc);
             } else {
                 return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype,
-                                                                        op, comm, module);
+                                                                        op, comm, module, NULL);
             }
         }
 
     } else {
         return ompi_coll_base_allreduce_intra_redscat_allgather(sbuf, rbuf, count, dtype, op, comm,
-                                                                module);
+                                                                module, NULL);
     }
     return MPI_SUCCESS;
 }

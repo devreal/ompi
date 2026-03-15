@@ -154,7 +154,8 @@ int ompi_coll_tuned_reduce_intra_do_this(const void *sbuf, void* rbuf, size_t co
                                          struct ompi_communicator_t *comm,
                                          mca_coll_base_module_t *module,
                                          int algorithm, int faninout,
-                                         int segsize, int max_requests )
+                                         int segsize, int max_requests,
+                                         mca_allocator_base_module_t *allocator)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_intra_do_this selected algorithm %d topo faninout %d segsize %d",
@@ -167,25 +168,31 @@ int ompi_coll_tuned_reduce_intra_do_this(const void *sbuf, void* rbuf, size_t co
                                                                op, root, comm, module);
     case (2):  return ompi_coll_base_reduce_intra_chain(sbuf, rbuf, count, dtype,
                                                         op, root, comm, module,
-                                                        segsize, faninout, max_requests);
+                                                        segsize, faninout, max_requests,
+                                                        allocator);
     case (3):  return ompi_coll_base_reduce_intra_pipeline(sbuf, rbuf, count, dtype,
                                                            op, root, comm, module,
-                                                           segsize, max_requests);
+                                                           segsize, max_requests,
+                                                           allocator);
     case (4):  return ompi_coll_base_reduce_intra_binary(sbuf, rbuf, count, dtype,
                                                          op, root, comm, module,
-                                                         segsize, max_requests);
+                                                         segsize, max_requests,
+                                                         allocator);
     case (5):  return ompi_coll_base_reduce_intra_binomial(sbuf, rbuf, count, dtype,
                                                            op, root, comm, module,
-                                                           segsize, max_requests);
+                                                           segsize, max_requests,
+                                                           allocator);
     case (6):  return ompi_coll_base_reduce_intra_in_order_binary(sbuf, rbuf, count, dtype,
                                                                   op, root, comm, module,
-                                                                  segsize, max_requests);
+                                                                  segsize, max_requests,
+                                                                  allocator);
     case (7):  return ompi_coll_base_reduce_intra_redscat_gather(sbuf, rbuf, count, dtype,
-                                                                  op, root, comm, module);
+                                                                  op, root, comm, module,
+                                                                  allocator);
     case (8):  return ompi_coll_base_reduce_intra_knomial(sbuf, rbuf, count, dtype,
                                                           op, root, comm, module,
                                                           segsize, max_requests,
-                                                          faninout);
+                                                          faninout, allocator);
     } /* switch */
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_intra_do_this attempt to select algorithm %d when only 0-%d is valid?",
