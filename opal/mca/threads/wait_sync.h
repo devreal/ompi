@@ -38,6 +38,7 @@
 BEGIN_C_DECLS
 
 extern int opal_max_thread_in_progress;
+extern opal_atomic_int32_t opal_num_thread_in_progress;
 
 typedef struct ompi_wait_sync_t {
     opal_atomic_int32_t count;

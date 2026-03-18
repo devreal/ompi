@@ -47,7 +47,7 @@ void opal_threads_base_wait_sync_global_wakeup_mt(int status)
     opal_mutex_unlock(&wait_sync_lock);
 }
 
-static opal_atomic_int32_t num_thread_in_progress = 0;
+opal_atomic_int32_t opal_num_thread_in_progress = 0;
 
 #define WAIT_SYNC_PASS_OWNERSHIP(who)                        \
     do {                                                     \
@@ -97,7 +97,7 @@ int ompi_sync_wait_mt(ompi_wait_sync_t *sync)
      *  - our sync has been triggered.
      */
 check_status:
-    if (sync != opal_threads_base_wait_sync_list && num_thread_in_progress >= opal_max_thread_in_progress) {
+    if (sync != opal_threads_base_wait_sync_list && opal_num_thread_in_progress >= opal_max_thread_in_progress) {
         opal_thread_internal_cond_wait(&sync->condition, &sync->lock);
 
         /**
@@ -115,12 +115,12 @@ check_status:
     }
     opal_thread_internal_mutex_unlock(&sync->lock);
 
-    OPAL_THREAD_ADD_FETCH32(&num_thread_in_progress, 1);
+    OPAL_THREAD_ADD_FETCH32(&opal_num_thread_in_progress, 1);
     while (sync->count > 0) { /* progress till completion */
         /* don't progress with the sync lock locked or you'll deadlock */
         opal_progress();
     }
-    OPAL_THREAD_ADD_FETCH32(&num_thread_in_progress, -1);
+    OPAL_THREAD_ADD_FETCH32(&opal_num_thread_in_progress, -1);
 
 i_am_done:
     /* My sync is now complete. Trim the list: remove self, wake next */
