@@ -26,10 +26,7 @@ jobs:
         runs-on: ubuntu-latest
         # Only act on PR comments (issue_comment fires for both issues and PRs).
         if: github.event.issue.pull_request != null
-        permissions:
-            actions: write       # trigger workflow_dispatch
-            issues: write        # post reactions and comments
-            pull-requests: read  # read PR merge status
+        permissions: write-all
         steps:
             - name: Parse command and validate PR
               id: parse
