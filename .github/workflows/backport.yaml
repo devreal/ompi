@@ -150,7 +150,7 @@ jobs:
                   COMMITS: ${{ steps.pr_meta.outputs.commits }}
               run: |
                   set -euo pipefail
-                  BACKPORT_BRANCH="backport/pr-${PR_NUMBER}-to-${TARGET_BRANCH}"
+                  BACKPORT_BRANCH="backports/pr-${PR_NUMBER}-to-${TARGET_BRANCH}"
                   echo "backport_branch=${BACKPORT_BRANCH}" >> "$GITHUB_OUTPUT"
 
                   git fetch origin "${TARGET_BRANCH}"
@@ -262,9 +262,9 @@ jobs:
                               '',
                               '```bash',
                               `git fetch origin ${targetBranch}`,
-                              `git checkout -b backport/pr-${prNumber}-to-${targetBranch} origin/${targetBranch}`,
+                              `git checkout -b backports/pr-${prNumber}-to-${targetBranch} origin/${targetBranch}`,
                               `git cherry-pick -x <commits>`,
-                              `git push origin backport/pr-${prNumber}-to-${targetBranch}`,
+                              `git push origin backports/pr-${prNumber}-to-${targetBranch}`,
                               '```',
                           ].join('\n'),
                       });
