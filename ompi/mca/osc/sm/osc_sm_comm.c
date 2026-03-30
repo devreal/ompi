@@ -44,8 +44,8 @@ ompi_osc_sm_win_get_notify_value(struct ompi_win_t *win,
         return MPI_ERR_NOTIFY_IDX;
     }
 
-    *value = (OMPI_MPI_COUNT_TYPE) osc_sm_target_notify_base(module, rank)[notify];
     opal_atomic_rmb();
+    *value = (OMPI_MPI_COUNT_TYPE) osc_sm_target_notify_base(module, rank)[notify];
 
     return OMPI_SUCCESS;
 }
@@ -141,14 +141,14 @@ ompi_osc_sm_rput_notify(const void *origin_addr,
         return ret;
     }
 
+    if (notify < 0 || (uint32_t) notify >= module->node_states[target].notify_counter_count) {
+        return MPI_ERR_NOTIFY_IDX;
+    }
+
     /* the only valid field of RMA request status is the MPI_ERROR field.
      * ompi_request_empty has status MPI_SUCCESS and indicates the request is
      * complete. */
     *ompi_req = &ompi_request_empty;
-
-    if (notify < 0 || (uint32_t) notify >= module->node_states[target].notify_counter_count) {
-        return MPI_ERR_NOTIFY_IDX;
-    }
 
     opal_atomic_wmb();
     opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
@@ -483,7 +483,7 @@ ompi_osc_sm_get_notify(void *origin_addr,
         return ret;
     }
     if (notify < 0 || (uint32_t) notify >= module->node_states[target].notify_counter_count) {
-        return OMPI_ERR_BAD_PARAM;
+        return MPI_ERR_NOTIFY_IDX;
     }
 
     opal_atomic_rmb();
