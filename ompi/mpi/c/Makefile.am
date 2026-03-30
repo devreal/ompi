@@ -223,6 +223,7 @@ prototype_sources = \
 	get_accumulate.c.in \
 	get_address.c.in \
 	get.c.in \
+	get_notify.c.in \
 	get_count.c.in \
 	get_elements.c.in \
 	get_elements_x.c.in \
@@ -341,6 +342,7 @@ prototype_sources = \
 	psend_init.c.in \
 	publish_name.c.in \
 	put.c.in \
+	put_notify.c.in \
 	query_thread.c.in \
 	raccumulate.c.in \
         recv.c.in \
@@ -484,6 +486,8 @@ prototype_sources = \
 	win_get_group.c.in \
 	win_get_info.c.in \
 	win_get_name.c.in \
+	win_get_notify_value.c.in \
+	win_reset_notify_value.c.in \
 	win_lock_all.c.in \
 	win_lock.c.in \
 	win_post.c.in \
@@ -698,6 +702,7 @@ interface_profile_sources = \
 	get_elements_x_generated.c \
 	get_hw_resource_info_generated.c \
 	get_library_version_generated.c \
+	get_notify_generated.c \
 	get_processor_name_generated.c \
 	get_version_generated.c \
 	graph_create_generated.c \
@@ -811,6 +816,7 @@ interface_profile_sources = \
 	psend_init_generated.c \
 	publish_name_generated.c \
 	put_generated.c \
+	put_notify_generated.c \
 	query_thread_generated.c \
 	raccumulate_generated.c \
 	recv_generated.c \
@@ -954,6 +960,8 @@ interface_profile_sources = \
 	win_get_group_generated.c \
 	win_get_info_generated.c \
 	win_get_name_generated.c \
+	win_get_notify_value_generated.c \
+	win_reset_notify_value_generated.c \
 	win_lock_all_generated.c \
 	win_lock_generated.c \
 	win_post_generated.c \
