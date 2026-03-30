@@ -702,6 +702,7 @@ interface_profile_sources = \
 	get_elements_x_generated.c \
 	get_hw_resource_info_generated.c \
 	get_library_version_generated.c \
+	get_notify_generated.c \
 	get_processor_name_generated.c \
 	get_version_generated.c \
 	graph_create_generated.c \
@@ -815,6 +816,7 @@ interface_profile_sources = \
 	psend_init_generated.c \
 	publish_name_generated.c \
 	put_generated.c \
+	put_notify_generated.c \
 	query_thread_generated.c \
 	raccumulate_generated.c \
 	recv_generated.c \

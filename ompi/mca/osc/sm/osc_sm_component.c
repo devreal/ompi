@@ -312,7 +312,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
             free(rbuf);
             goto error;
         }
-
+        /*  */
         total = 0;
         total_counters = 0;
         for (i = 0 ; i < comm_size ; ++i) {
@@ -391,9 +391,10 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->global_state = (ompi_osc_sm_global_state_t *) (module->posts[0] + comm_size * post_size);
         module->node_states = (ompi_osc_sm_node_state_t *) (module->global_state + 1);
 
-        /* set up notify counters in shared memory after node_states */
-        module->notify_counters = (uint64_t *) ((char *)(module->node_states + comm_size) +
-                                   OPAL_ALIGN_PAD_AMOUNT((uintptr_t)(module->node_states + comm_size), 64));
+        /* set up notify counters in shared memory after posts and state.
+         * posts_size and state_size are both padded to 64-byte multiples (lines 328, 330),
+         * and segment_base is page-aligned, so this is guaranteed 64-byte aligned. */
+        module->notify_counters = (uint64_t *)((char *) module->segment_base + posts_size + state_size);
         /* zero out notify counters */
         memset(module->notify_counters, 0, total_counters * sizeof(uint64_t));
 
