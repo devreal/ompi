@@ -238,7 +238,7 @@ ompi_osc_sm_rget_notify(void *origin_addr,
     }
 
     opal_atomic_rmb();
-    opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
+    opal_atomic_add(osc_sm_target_notify_base(module, target) + notify, 1);
 
     return OMPI_SUCCESS;
 }
