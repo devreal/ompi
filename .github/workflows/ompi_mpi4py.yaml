@@ -20,10 +20,17 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-22.04
+    # We need Unbuntu 24.04 (over 22.04) due to a kernel bug,
+    # see https://github.com/google/sanitizers/issues/856.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       MPI4PY_TEST_SPAWN: true
+      # disable ASAN while building
+      ASAN_OPTIONS: verify_asan_link_order=0,detect_odr_violation=0,abort_on_error=0
+      # disable leak detection
+      LSAN_OPTIONS: detect_leaks=0,exitcode=0
+
     steps:
     - name: Configure hostname
       run:  echo 127.0.0.1 `hostname` | sudo tee -a /etc/hosts > /dev/null
@@ -31,7 +38,7 @@ jobs:
 
     - name: Install depencencies
       run:  sudo apt-get install -y -q
-              libnuma-dev
+              libnuma-dev libasan8
       if:   ${{ runner.os == 'Linux' }}
 
     - name: Checkout Open MPI
@@ -59,7 +66,8 @@ jobs:
               --disable-oshmem
               --disable-silent-rules
               --prefix=/opt/openmpi
-              LDFLAGS=-Wl,-rpath,/opt/openmpi/lib
+              CFLAGS="-O2 -fno-omit-frame-pointer -g -fsanitize=address"
+              LDFLAGS="-Wl,-rpath,/opt/openmpi/lib -fsanitize=address"
       working-directory: mpi-build
 
     - name: Build MPI
@@ -115,6 +123,21 @@ jobs:
       env:
         CFLAGS: "-O0"
 
+    - name: Setting up ASAN environment
+      # LD_PRELOAD is needed to make sure ASAN is the first thing loaded
+      # as it will otherwise complain.
+      # Leak detection is currently disabled because of the size of the report.
+      # The patcher is disabled because ASAN fails if code mmaps data at fixed
+      # memory addresses, see https://github.com/open-mpi/ompi/issues/12819.
+      # ODR violation detection is disabled until #13469 is fixed
+      # Disabling stack use after return detection to reduce slowdown, per
+      # https://github.com/llvm/llvm-project/issues/64190.
+      run: |
+        echo LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libasan.so.8 >> $GITHUB_ENV
+        echo ASAN_OPTIONS=detect_odr_violation=0,abort_on_error=1,detect_stack_use_after_return=0 >> $GITHUB_ENV
+        echo LSAN_OPTIONS=detect_leaks=0,exitcode=0 >> $GITHUB_ENV
+        echo OMPI_MCA_memory=^patcher >> $GITHUB_ENV
+
     - name: Test mpi4py (singleton)
       run:  python test/main.py -v -x TestExcErrhandlerNull
       if:   ${{ true }}
@@ -145,6 +168,18 @@ jobs:
       if:   ${{ true }}
       timeout-minutes: 10
 
+    - name: Show MPI (ASAN)
+      run:  ompi_info
+
+    - name: Show MPICC (ASAN)
+      run:  mpicc -show
+
+    - name: Disabling ASAN environment
+      run: |
+        echo LD_PRELOAD= >> $GITHUB_ENV
+        echo ASAN_OPTIONS=verify_asan_link_order=0,detect_odr_violation=0,abort_on_error=0 >> $GITHUB_ENV
+        echo LSAN_OPTIONS=detect_leaks=0,exitcode=0 >> $GITHUB_ENV
+
     - name: Relocate Open MPI installation
       run:  mv /opt/openmpi /opt/ompi
     - name: Update PATH and set OPAL_PREFIX and LD_LIBRARY_PATH
@@ -157,4 +192,3 @@ jobs:
       run:  python test/main.py -v -x TestExcErrhandlerNull
       if:   ${{ true }}
       timeout-minutes: 10
-
