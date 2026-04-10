@@ -23,6 +23,7 @@
 #include "ompi/mca/coll/base/coll_base_util.h"
 #include "ompi/mca/pml/pml.h"
 #include "ompi/op/op.h"
+#include "ompi/op/op_gpu_session.h"
 
 /*
  * ompi_coll_base_scan_intra_linear
@@ -157,7 +158,7 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
 int ompi_coll_base_scan_intra_recursivedoubling(
     const void *sendbuf, void *recvbuf, size_t count, struct ompi_datatype_t *datatype,
     struct ompi_op_t *op, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module, mca_allocator_base_module_t *allocator)
+    mca_coll_base_module_t *module, ompi_op_gpu_session_t *session)
 {
     int err = MPI_SUCCESS;
     char *tmpsend_raw = NULL, *tmprecv_raw = NULL;
@@ -179,8 +180,8 @@ int ompi_coll_base_scan_intra_recursivedoubling(
 
     ptrdiff_t dsize, gap;
     dsize = opal_datatype_span(&datatype->super, count, &gap);
-    tmpsend_raw = COLL_BASE_ALLOC(allocator, dsize);
-    tmprecv_raw = COLL_BASE_ALLOC(allocator, dsize);
+    tmpsend_raw = COLL_SESSION_ALLOC(session, dsize);
+    tmprecv_raw = COLL_SESSION_ALLOC(session, dsize);
     if (NULL == tmpsend_raw || NULL == tmprecv_raw) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
         goto cleanup_and_return;
@@ -203,16 +204,16 @@ int ompi_coll_base_scan_intra_recursivedoubling(
 
             if (rank > remote) {
                 /* Accumulate prefix reduction: recvbuf = precv <op> recvbuf */
-                ompi_op_reduce(op, precv, recvbuf, count, datatype);
+                COLL_BASE_REDUCE(session, op, precv, recvbuf, count, datatype);
                 /* Partial result: psend = precv <op> psend */
-                ompi_op_reduce(op, precv, psend, count, datatype);
+                COLL_BASE_REDUCE(session, op, precv, psend, count, datatype);
             } else {
                 if (is_commute) {
                     /* psend = precv <op> psend */
-                    ompi_op_reduce(op, precv, psend, count, datatype);
+                    COLL_BASE_REDUCE(session, op, precv, psend, count, datatype);
                 } else {
                     /* precv = psend <op> precv */
-                    ompi_op_reduce(op, psend, precv, count, datatype);
+                    COLL_BASE_REDUCE(session, op, psend, precv, count, datatype);
                     char *tmp = psend;
                     psend = precv;
                     precv = tmp;
@@ -222,7 +223,7 @@ int ompi_coll_base_scan_intra_recursivedoubling(
     }
 
 cleanup_and_return:
-    COLL_BASE_FREE(allocator, tmpsend_raw);
-    COLL_BASE_FREE(allocator, tmprecv_raw);
+    COLL_SESSION_FREE(session, tmpsend_raw);
+    COLL_SESSION_FREE(session, tmprecv_raw);
     return err;
 }

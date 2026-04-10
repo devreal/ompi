@@ -131,7 +131,7 @@ int ompi_coll_tuned_reduce_scatter_intra_do_this(const void *sbuf, void* rbuf,
                                                  struct ompi_communicator_t *comm,
                                                  mca_coll_base_module_t *module,
                                                  int algorithm, int faninout, int segsize,
-                                                 mca_allocator_base_module_t *allocator)
+                                                 ompi_op_gpu_session_t *session)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_intra_do_this selected algorithm %d topo faninout %d segsize %d",
@@ -142,16 +142,16 @@ int ompi_coll_tuned_reduce_scatter_intra_do_this(const void *sbuf, void* rbuf,
                                                                     dtype, op, comm, module);
     case (1): return ompi_coll_base_reduce_scatter_intra_nonoverlapping(sbuf, rbuf, rcounts,
                                                                         dtype, op, comm, module,
-                                                                        allocator);
+                                                                        session);
     case (2): return ompi_coll_base_reduce_scatter_intra_basic_recursivehalving(sbuf, rbuf, rcounts,
                                                                                 dtype, op, comm, module,
-                                                                                allocator);
+                                                                                session);
     case (3): return ompi_coll_base_reduce_scatter_intra_ring(sbuf, rbuf, rcounts,
                                                               dtype, op, comm, module,
-                                                              allocator);
+                                                              session);
     case (4): return ompi_coll_base_reduce_scatter_intra_butterfly(sbuf, rbuf, rcounts,
                                                                    dtype, op, comm, module,
-                                                                   allocator);
+                                                                   session);
     } /* switch */
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_intra_do_this attempt to select algorithm %d when only 0-%d is valid?",

@@ -23,5 +23,7 @@
 # ompi/Makefile.am
 
 headers += op/op.h
+headers += op/op_gpu_session.h
 
 lib@OMPI_LIBMPI_NAME@_la_SOURCES += op/op.c
+lib@OMPI_LIBMPI_NAME@_la_SOURCES += op/op_gpu_session.c
