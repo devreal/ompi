@@ -348,10 +348,30 @@ typedef void (*ompi_op_base_component_session_reduce_fn_t)(
                   const void *src, void *dst, size_t count);
 
 /**
- * Optional component hook: shut down persistent kernel and free session.
- * Must be NULL-safe.
+ * Optional component hook: signal the persistent kernel to exit and
+ * synchronize the stream.  The session struct and its managed memory remain
+ * allocated so the session can be recycled by opc_session_restart.
  */
-typedef void (*ompi_op_base_component_session_end_fn_t)(
+typedef void (*ompi_op_base_component_session_stop_fn_t)(
+                  struct ompi_op_gpu_session_t *session);
+
+/**
+ * Optional component hook: reconfigure an idle (stopped) session for a new
+ * (op, dtype) combination and relaunch the appropriate persistent kernel.
+ * Returns true on success; false if no GPU kernel exists for this combination
+ * (caller should return the session to the pool and fall back to host path).
+ */
+typedef bool (*ompi_op_base_component_session_restart_fn_t)(
+                  struct ompi_op_gpu_session_t *session,
+                  struct ompi_op_t *op,
+                  struct ompi_datatype_t *dtype);
+
+/**
+ * Optional component hook: free managed memory, GPU stream, and backend
+ * private state.  Called when a pooled session is permanently discarded.
+ * Must NOT free the ompi_op_gpu_session_t struct itself.
+ */
+typedef void (*ompi_op_base_component_session_free_fn_t)(
                   struct ompi_op_gpu_session_t *session);
 
 /**
@@ -373,9 +393,11 @@ typedef struct ompi_op_base_component_1_0_0_t {
     ompi_op_base_component_op_query_1_0_0_fn_t opc_op_query;
 
     /** Optional: GPU session lifecycle hooks.  NULL in host-only components. */
-    ompi_op_base_component_session_begin_fn_t  opc_session_begin;
-    ompi_op_base_component_session_reduce_fn_t opc_session_reduce;
-    ompi_op_base_component_session_end_fn_t    opc_session_end;
+    ompi_op_base_component_session_begin_fn_t   opc_session_begin;
+    ompi_op_base_component_session_reduce_fn_t  opc_session_reduce;
+    ompi_op_base_component_session_stop_fn_t    opc_session_stop;
+    ompi_op_base_component_session_restart_fn_t opc_session_restart;
+    ompi_op_base_component_session_free_fn_t    opc_session_free;
 } ompi_op_base_component_1_0_0_t;
 
 
