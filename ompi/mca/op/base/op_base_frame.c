@@ -29,6 +29,7 @@
 #include "ompi/constants.h"
 #include "ompi/mca/op/op.h"
 #include "ompi/mca/op/base/base.h"
+#include "ompi/op/op_gpu_session.h"
 
 
 /*
@@ -59,5 +60,12 @@ OBJ_CLASS_INSTANCE(ompi_op_base_module_t, opal_object_t,
 OBJ_CLASS_INSTANCE(ompi_op_base_module_1_0_0_t, opal_object_t,
                    module_constructor_1_0_0, NULL);
 
-MCA_BASE_FRAMEWORK_DECLARE(ompi, op, NULL, NULL, NULL, NULL,
+static int
+op_base_close(void)
+{
+    ompi_op_gpu_session_pool_finalize();
+    return OMPI_SUCCESS;
+}
+
+MCA_BASE_FRAMEWORK_DECLARE(ompi, op, NULL, NULL, NULL, op_base_close,
                            mca_op_base_static_components, 0);
