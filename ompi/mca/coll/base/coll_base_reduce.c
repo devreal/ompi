@@ -38,6 +38,7 @@
 #include "ompi/mca/pml/pml.h"
 #include "ompi/op/op.h"
 #include "ompi/mca/coll/base/coll_base_functions.h"
+#include "ompi/op/op_gpu_session.h"
 #include "coll_base_topo.h"
 #include "coll_base_util.h"
 
@@ -66,7 +67,7 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
                                     int root, ompi_communicator_t* comm,
                                     mca_coll_base_module_t *module,
                                     ompi_coll_tree_t* tree, size_t count_by_segment,
-                                    int max_outstanding_reqs, mca_allocator_base_module_t *allocator )
+                                    int max_outstanding_reqs, ompi_op_gpu_session_t *session )
 {
     char *inbuf[2] = {NULL, NULL}, *inbuf_free[2] = {NULL, NULL};
     char *accumbuf = NULL, *accumbuf_free = NULL;
@@ -106,7 +107,7 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
         if( (NULL == accumbuf) || (root != rank) ) {
             /* Allocate temporary accumulator buffer. */
             size = opal_datatype_span(&datatype->super, original_count, &gap);
-            accumbuf_free = (char*)COLL_BASE_ALLOC(allocator, size);
+            accumbuf_free = (char*)COLL_SESSION_ALLOC(session, size);
             if (accumbuf_free == NULL) {
                 line = __LINE__; ret = -1; goto error_hndl;
             }
@@ -123,7 +124,7 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
         }
         /* Allocate two buffers for incoming segments */
         real_segment_size = opal_datatype_span(&datatype->super, count_by_segment, &gap);
-        inbuf_free[0] = (char*) COLL_BASE_ALLOC(allocator, real_segment_size);
+        inbuf_free[0] = (char*) COLL_SESSION_ALLOC(session, real_segment_size);
         if( inbuf_free[0] == NULL ) {
             line = __LINE__; ret = -1; goto error_hndl;
         }
@@ -131,7 +132,7 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
         /* if there is chance to overlap communication -
            allocate second buffer */
         if( (num_segments > 1) || (tree->tree_nextsize > 1) ) {
-            inbuf_free[1] = (char*) COLL_BASE_ALLOC(allocator, real_segment_size);
+            inbuf_free[1] = (char*) COLL_SESSION_ALLOC(session, real_segment_size);
             if( inbuf_free[1] == NULL ) {
                 line = __LINE__; ret = -1; goto error_hndl;
             }
@@ -202,9 +203,9 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
                         }
                     }
                     /* apply operation */
-                    ompi_op_reduce(op, local_op_buffer,
-                                   accumbuf + (ptrdiff_t)segindex * (ptrdiff_t)segment_increment,
-                                   recvcount, datatype );
+                    COLL_BASE_REDUCE(session, op, local_op_buffer,
+                                     accumbuf + (ptrdiff_t)segindex * (ptrdiff_t)segment_increment,
+                                     recvcount, datatype);
                 } else if ( segindex > 0 ) {
                     void* accumulator = accumbuf + (ptrdiff_t)(segindex-1) * (ptrdiff_t)segment_increment;
                     if( tree->tree_nextsize <= 1 ) {
@@ -213,8 +214,8 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
                             local_op_buffer = sendtmpbuf + (ptrdiff_t)(segindex-1) * (ptrdiff_t)segment_increment;
                         }
                     }
-                    ompi_op_reduce(op, local_op_buffer, accumulator, prevcount,
-                                   datatype );
+                    COLL_BASE_REDUCE(session, op, local_op_buffer, accumulator, prevcount,
+                                     datatype);
 
                     /* all reduced on available data this step (i) complete,
                      * pass to the next process unless you are the root.
@@ -242,9 +243,9 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
         } /* end of for each segment */
 
         /* clean up */
-        COLL_BASE_FREE(allocator, inbuf_free[0]);
-        COLL_BASE_FREE(allocator, inbuf_free[1]);
-        COLL_BASE_FREE(allocator, accumbuf_free);
+        COLL_SESSION_FREE(session, inbuf_free[0]);
+        COLL_SESSION_FREE(session, inbuf_free[1]);
+        COLL_SESSION_FREE(session, accumbuf_free);
     }
 
     /* leaf nodes
@@ -365,9 +366,9 @@ int ompi_coll_base_reduce_generic( const void* sendbuf, void* recvbuf, size_t or
         }
         ompi_coll_base_free_reqs(sreq, max_outstanding_reqs);
     }
-    COLL_BASE_FREE(allocator, inbuf_free[0]);
-    COLL_BASE_FREE(allocator, inbuf_free[1]);
-    COLL_BASE_FREE(allocator, accumbuf_free);
+    COLL_SESSION_FREE(session, inbuf_free[0]);
+    COLL_SESSION_FREE(session, inbuf_free[1]);
+    COLL_SESSION_FREE(session, accumbuf_free);
     OPAL_OUTPUT (( ompi_coll_base_framework.framework_output,
                    "ERROR_HNDL: node %d file %s line %d error %d\n",
                    rank, __FILE__, line, ret ));
@@ -388,7 +389,7 @@ int ompi_coll_base_reduce_intra_chain( const void *sendbuf, void *recvbuf, size_
                                         ompi_communicator_t* comm,
                                         mca_coll_base_module_t *module,
                                         uint32_t segsize, int fanout,
-                                        int max_outstanding_reqs, mca_allocator_base_module_t *allocator )
+                                        int max_outstanding_reqs, ompi_op_gpu_session_t *session )
 {
     size_t segcount = count;
     size_t typelng;
@@ -408,7 +409,7 @@ int ompi_coll_base_reduce_intra_chain( const void *sendbuf, void *recvbuf, size_
     return ompi_coll_base_reduce_generic( sendbuf, recvbuf, count, datatype,
                                            op, root, comm, module,
                                            data->cached_chain,
-                                           segcount, max_outstanding_reqs, allocator );
+                                           segcount, max_outstanding_reqs, session );
 }
 
 
@@ -418,7 +419,7 @@ int ompi_coll_base_reduce_intra_pipeline( const void *sendbuf, void *recvbuf,
                                            ompi_communicator_t* comm,
                                            mca_coll_base_module_t *module,
                                            uint32_t segsize,
-                                           int max_outstanding_reqs, mca_allocator_base_module_t *allocator  )
+                                           int max_outstanding_reqs, ompi_op_gpu_session_t *session  )
 {
     size_t segcount = count;
     size_t typelng;
@@ -440,7 +441,7 @@ int ompi_coll_base_reduce_intra_pipeline( const void *sendbuf, void *recvbuf,
     return ompi_coll_base_reduce_generic( sendbuf, recvbuf, count, datatype,
                                            op, root, comm, module,
                                            data->cached_pipeline,
-                                           segcount, max_outstanding_reqs, allocator );
+                                           segcount, max_outstanding_reqs, session );
 }
 
 int ompi_coll_base_reduce_intra_binary( const void *sendbuf, void *recvbuf,
@@ -449,7 +450,7 @@ int ompi_coll_base_reduce_intra_binary( const void *sendbuf, void *recvbuf,
                                          ompi_communicator_t* comm,
                                          mca_coll_base_module_t *module,
                                          uint32_t segsize,
-                                         int max_outstanding_reqs, mca_allocator_base_module_t *allocator  )
+                                         int max_outstanding_reqs, ompi_op_gpu_session_t *session  )
 {
     size_t segcount = count;
     size_t typelng;
@@ -471,7 +472,7 @@ int ompi_coll_base_reduce_intra_binary( const void *sendbuf, void *recvbuf,
     return ompi_coll_base_reduce_generic( sendbuf, recvbuf, count, datatype,
                                            op, root, comm, module,
                                            data->cached_bintree,
-                                           segcount, max_outstanding_reqs, allocator );
+                                           segcount, max_outstanding_reqs, session );
 }
 
 int ompi_coll_base_reduce_intra_binomial( const void *sendbuf, void *recvbuf,
@@ -480,7 +481,7 @@ int ompi_coll_base_reduce_intra_binomial( const void *sendbuf, void *recvbuf,
                                            ompi_communicator_t* comm,
                                            mca_coll_base_module_t *module,
                                            uint32_t segsize,
-                                           int max_outstanding_reqs, mca_allocator_base_module_t *allocator  )
+                                           int max_outstanding_reqs, ompi_op_gpu_session_t *session  )
 {
     size_t segcount = count;
     size_t typelng;
@@ -502,7 +503,7 @@ int ompi_coll_base_reduce_intra_binomial( const void *sendbuf, void *recvbuf,
     return ompi_coll_base_reduce_generic( sendbuf, recvbuf, count, datatype,
                                            op, root, comm, module,
                                            data->cached_in_order_bmtree,
-                                           segcount, max_outstanding_reqs, allocator );
+                                           segcount, max_outstanding_reqs, session );
 }
 
 /*
@@ -519,7 +520,7 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
                                                   ompi_communicator_t* comm,
                                                   mca_coll_base_module_t *module,
                                                   uint32_t segsize,
-                                                  int max_outstanding_reqs, mca_allocator_base_module_t *allocator  )
+                                                  int max_outstanding_reqs, ompi_op_gpu_session_t *session  )
 {
     int ret, rank, size, io_root, segcount = count;
     void *use_this_sendbuf = NULL;
@@ -560,7 +561,7 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
         dsize = opal_datatype_span(&datatype->super, count, &gap);
 
         if ((root == rank) && (MPI_IN_PLACE == sendbuf)) {
-            tmpbuf_free = (char *) COLL_BASE_ALLOC(allocator, dsize);
+            tmpbuf_free = (char *) COLL_SESSION_ALLOC(session, dsize);
             if (NULL == tmpbuf_free) {
                 return MPI_ERR_INTERN;
             }
@@ -570,7 +571,7 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
                                                 (char*)recvbuf);
             use_this_sendbuf = tmpbuf;
         } else if (io_root == rank) {
-            tmpbuf_free = (char *) COLL_BASE_ALLOC(allocator, dsize);
+            tmpbuf_free = (char *) COLL_SESSION_ALLOC(session, dsize);
             if (NULL == tmpbuf_free) {
                 return MPI_ERR_INTERN;
             }
@@ -583,9 +584,9 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
     ret = ompi_coll_base_reduce_generic( use_this_sendbuf, use_this_recvbuf, count, datatype,
                                           op, io_root, comm, module,
                                           data->cached_in_order_bintree,
-                                          segcount, max_outstanding_reqs, allocator );
+                                          segcount, max_outstanding_reqs, session );
     if (MPI_SUCCESS != ret) {
-        COLL_BASE_FREE(allocator, tmpbuf_free);
+        COLL_SESSION_FREE(session, tmpbuf_free);
         return ret;
     }
 
@@ -597,7 +598,7 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
                                     MCA_COLL_BASE_TAG_REDUCE, comm,
                                     MPI_STATUS_IGNORE));
             if (MPI_SUCCESS != ret) {
-                COLL_BASE_FREE(allocator, tmpbuf_free);
+                COLL_SESSION_FREE(session, tmpbuf_free);
                 return ret;
             }
 
@@ -607,13 +608,13 @@ int ompi_coll_base_reduce_intra_in_order_binary( const void *sendbuf, void *recv
                                     MCA_COLL_BASE_TAG_REDUCE,
                                     MCA_PML_BASE_SEND_STANDARD, comm));
             if (MPI_SUCCESS != ret) {
-                COLL_BASE_FREE(allocator, tmpbuf_free);
+                COLL_SESSION_FREE(session, tmpbuf_free);
                 return ret;
             }
         }
     }
     if (NULL != tmpbuf_free) {
-        COLL_BASE_FREE(allocator, tmpbuf_free);
+        COLL_SESSION_FREE(session, tmpbuf_free);
     }
 
     return MPI_SUCCESS;
@@ -812,7 +813,7 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
 int ompi_coll_base_reduce_intra_redscat_gather(
     const void *sbuf, void *rbuf, size_t count, struct ompi_datatype_t *dtype,
     struct ompi_op_t *op, int root, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module, mca_allocator_base_module_t *allocator)
+    mca_coll_base_module_t *module, ompi_op_gpu_session_t *session)
 {
     int comm_size = ompi_comm_size(comm);
     int rank = ompi_comm_rank(comm);
@@ -844,7 +845,7 @@ int ompi_coll_base_reduce_intra_redscat_gather(
 
     /* Temporary buffers */
     char *tmp_buf_raw = NULL, *rbuf_raw = NULL;
-    tmp_buf_raw = COLL_BASE_ALLOC(allocator, dsize);
+    tmp_buf_raw = COLL_SESSION_ALLOC(session, dsize);
     if (NULL == tmp_buf_raw) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
         goto cleanup_and_return;
@@ -852,7 +853,7 @@ int ompi_coll_base_reduce_intra_redscat_gather(
     char *tmp_buf = tmp_buf_raw - gap;
 
     if (rank != root) {
-        rbuf_raw = COLL_BASE_ALLOC(allocator, dsize);
+        rbuf_raw = COLL_SESSION_ALLOC(session, dsize);
         if (NULL == rbuf_raw) {
             err = OMPI_ERR_OUT_OF_RESOURCE;
             goto cleanup_and_return;
@@ -906,8 +907,8 @@ int ompi_coll_base_reduce_intra_redscat_gather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Reduce on the right half of the buffers (result in rbuf) */
-            ompi_op_reduce(op, (char *)tmp_buf + (ptrdiff_t)count_lhalf * extent,
-                           (char *)rbuf + count_lhalf * extent, count_rhalf, dtype);
+            COLL_BASE_REDUCE(session, op, (char *)tmp_buf + (ptrdiff_t)count_lhalf * extent,
+                             (char *)rbuf + count_lhalf * extent, count_rhalf, dtype);
 
             /* Send the right half to the left neighbor */
             err = MCA_PML_CALL(send((char *)rbuf + (ptrdiff_t)count_lhalf * extent,
@@ -934,7 +935,7 @@ int ompi_coll_base_reduce_intra_redscat_gather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Reduce on the right half of the buffers (result in rbuf) */
-            ompi_op_reduce(op, tmp_buf, rbuf, count_lhalf, dtype);
+            COLL_BASE_REDUCE(session, op, tmp_buf, rbuf, count_lhalf, dtype);
 
             /* Recv the right half from the right neighbor */
             err = MCA_PML_CALL(recv((char *)rbuf + (ptrdiff_t)count_lhalf * extent,
@@ -1016,9 +1017,9 @@ int ompi_coll_base_reduce_intra_redscat_gather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Local reduce: rbuf[] = tmp_buf[] <op> rbuf[] */
-            ompi_op_reduce(op, (char *)tmp_buf + (ptrdiff_t)rindex[step] * extent,
-                           (char *)rbuf + (ptrdiff_t)rindex[step] * extent,
-                           rcount[step], dtype);
+            COLL_BASE_REDUCE(session, op, (char *)tmp_buf + (ptrdiff_t)rindex[step] * extent,
+                             (char *)rbuf + (ptrdiff_t)rindex[step] * extent,
+                             rcount[step], dtype);
 
             /* Move the current window to the received message */
             if (step + 1 < nsteps) {
@@ -1129,8 +1130,8 @@ int ompi_coll_base_reduce_intra_redscat_gather(
     }
 
   cleanup_and_return:
-    COLL_BASE_FREE(allocator, tmp_buf_raw);
-    COLL_BASE_FREE(allocator, rbuf_raw);
+    COLL_SESSION_FREE(session, tmp_buf_raw);
+    COLL_SESSION_FREE(session, rbuf_raw);
     if (NULL != rindex)
         free(rindex);
     if (NULL != sindex)
@@ -1168,7 +1169,7 @@ int ompi_coll_base_reduce_intra_knomial( const void *sendbuf, void *recvbuf,
                                            ompi_communicator_t* comm,
                                            mca_coll_base_module_t *module,
                                            uint32_t segsize,
-                                           int max_outstanding_reqs, int radix, mca_allocator_base_module_t *allocator)
+                                           int max_outstanding_reqs, int radix, ompi_op_gpu_session_t *session)
 {
     int err = OMPI_SUCCESS, rank, line;
     ptrdiff_t extent, lb;
@@ -1213,7 +1214,7 @@ int ompi_coll_base_reduce_intra_knomial( const void *sendbuf, void *recvbuf,
         sendtmpbuf = (char *)recvbuf;
     }
     buf_size = opal_datatype_span(&datatype->super, (int64_t)count, &gap);
-    reduce_buf = (char *)COLL_BASE_ALLOC(allocator, buf_size);
+    reduce_buf = (char *)COLL_SESSION_ALLOC(session, buf_size);
     reduce_buf_start = reduce_buf - gap;
     err = ompi_datatype_copy_content_same_ddt(datatype, count,
                                               (char*)reduce_buf_start,
@@ -1225,7 +1226,7 @@ int ompi_coll_base_reduce_intra_knomial( const void *sendbuf, void *recvbuf,
     max_reqs = num_children;
     if(!is_leaf) {
         buf_size = opal_datatype_span(&datatype->super, (int64_t)count * num_children, &gap);
-        child_buf = (char *)COLL_BASE_ALLOC(allocator, buf_size);
+        child_buf = (char *)COLL_SESSION_ALLOC(session, buf_size);
         child_buf_start = child_buf - gap;
         reqs = ompi_coll_base_comm_get_reqs(data, max_reqs);
     }
@@ -1248,11 +1249,10 @@ int ompi_coll_base_reduce_intra_knomial( const void *sendbuf, void *recvbuf,
     }
 
     for (int i = 0; i < num_children; i++) {
-        ompi_op_reduce(op,
-                       child_buf_start + (ptrdiff_t)i * count * extent,
-                       reduce_buf,
-                       count,
-                       datatype);
+        COLL_BASE_REDUCE(session, op,
+                         child_buf_start + (ptrdiff_t)i * count * extent,
+                         reduce_buf,
+                         count, datatype);
     }
 
     if (rank != root) {
@@ -1273,18 +1273,18 @@ int ompi_coll_base_reduce_intra_knomial( const void *sendbuf, void *recvbuf,
         if (MPI_SUCCESS != err) { line = __LINE__; goto err_hndl; }
     }
 
-    COLL_BASE_FREE(allocator, child_buf);
-    COLL_BASE_FREE(allocator, reduce_buf);
+    COLL_SESSION_FREE(session, child_buf);
+    COLL_SESSION_FREE(session, reduce_buf);
     return MPI_SUCCESS;
 
  err_hndl:
     if (NULL != child_buf) {
-        COLL_BASE_FREE(allocator, child_buf);
+        COLL_SESSION_FREE(session, child_buf);
         child_buf = NULL;
         child_buf_start = NULL;
     }
     if (NULL != reduce_buf) {
-        COLL_BASE_FREE(allocator, reduce_buf);
+        COLL_SESSION_FREE(session, reduce_buf);
         reduce_buf = NULL;
         reduce_buf_start = NULL;
     }

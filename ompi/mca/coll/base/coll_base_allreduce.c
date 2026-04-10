@@ -40,6 +40,7 @@
 #include "ompi/mca/pml/pml.h"
 #include "ompi/op/op.h"
 #include "ompi/mca/coll/base/coll_base_functions.h"
+#include "ompi/op/op_gpu_session.h"
 #include "coll_base_topo.h"
 #include "coll_base_util.h"
 
@@ -137,7 +138,7 @@ ompi_coll_base_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf,
                                                   struct ompi_op_t *op,
                                                   struct ompi_communicator_t *comm,
                                                   mca_coll_base_module_t *module,
-                                                  mca_allocator_base_module_t *allocator)
+                                                  ompi_op_gpu_session_t *session)
 {
     int ret, line, rank, size, adjsize, remote, distance;
     int newrank, newremote, extra_ranks;
@@ -161,7 +162,7 @@ ompi_coll_base_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf,
 
     /* Allocate and initialize temporary send buffer */
     span = opal_datatype_span(&dtype->super, count, &gap);
-    inplacebuf_free = (char*) COLL_BASE_ALLOC(allocator, span);
+    inplacebuf_free = (char*) COLL_SESSION_ALLOC(session, span);
     if (NULL == inplacebuf_free) { ret = -1; line = __LINE__; goto error_hndl; }
     inplacebuf = inplacebuf_free - gap;
 
@@ -201,7 +202,7 @@ ompi_coll_base_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf,
                                     MPI_STATUS_IGNORE));
             if (MPI_SUCCESS != ret) { line = __LINE__; goto error_hndl; }
             /* tmpsend = tmprecv (op) tmpsend */
-            ompi_op_reduce(op, tmprecv, tmpsend, count, dtype);
+            COLL_BASE_REDUCE(session, op, tmprecv, tmpsend, count, dtype);
             newrank = rank >> 1;
         }
     } else {
@@ -231,13 +232,13 @@ ompi_coll_base_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf,
         /* Apply operation */
         if (rank < remote) {
             /* tmprecv = tmpsend (op) tmprecv */
-            ompi_op_reduce(op, tmpsend, tmprecv, count, dtype);
+            COLL_BASE_REDUCE(session, op, tmpsend, tmprecv, count, dtype);
             tmpswap = tmprecv;
             tmprecv = tmpsend;
             tmpsend = tmpswap;
         } else {
             /* tmpsend = tmprecv (op) tmpsend */
-            ompi_op_reduce(op, tmprecv, tmpsend, count, dtype);
+            COLL_BASE_REDUCE(session, op, tmprecv, tmpsend, count, dtype);
         }
     }
 
@@ -267,14 +268,14 @@ ompi_coll_base_allreduce_intra_recursivedoubling(const void *sbuf, void *rbuf,
         if (ret < 0) { line = __LINE__; goto error_hndl; }
     }
 
-    COLL_BASE_FREE(allocator, inplacebuf_free);
+    COLL_SESSION_FREE(session, inplacebuf_free);
     return MPI_SUCCESS;
 
  error_hndl:
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output, "%s:%4d\tRank %d Error occurred %d\n",
                  __FILE__, line, rank, ret));
     (void)line;  // silence compiler warning
-    COLL_BASE_FREE(allocator, inplacebuf_free);
+    COLL_SESSION_FREE(session, inplacebuf_free);
     return ret;
 }
 
@@ -348,7 +349,7 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                                      struct ompi_op_t *op,
                                      struct ompi_communicator_t *comm,
                                      mca_coll_base_module_t *module,
-                                     mca_allocator_base_module_t *allocator)
+                                     ompi_op_gpu_session_t *session)
 {
     int ret, line, rank, size, k, recv_from, send_to, block_count, inbi;
     int early_segcount, late_segcount, split_rank, max_segcount;
@@ -380,7 +381,7 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                                                                   count,
                                                                   dtype, op,
                                                                   comm, module,
-                                                                  allocator));
+                                                                  session));
     }
 
     /* Allocate and initialize temporary buffers */
@@ -404,10 +405,10 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
     max_real_segsize = true_extent + (max_segcount - 1) * extent;
 
 
-    inbuf[0] = (char*)COLL_BASE_ALLOC(allocator, max_real_segsize);
+    inbuf[0] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
     if (NULL == inbuf[0]) { ret = -1; line = __LINE__; goto error_hndl; }
     if (size > 2) {
-        inbuf[1] = (char*)COLL_BASE_ALLOC(allocator, max_real_segsize);
+        inbuf[1] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
         if (NULL == inbuf[1]) { ret = -1; line = __LINE__; goto error_hndl; }
     }
 
@@ -475,7 +476,7 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                         ((ptrdiff_t)prevblock * late_segcount + split_rank));
         block_count = ((prevblock < split_rank)? early_segcount : late_segcount);
         tmprecv = ((char*)rbuf) + (ptrdiff_t)block_offset * extent;
-        ompi_op_reduce(op, inbuf[inbi ^ 0x1], tmprecv, block_count, dtype);
+        COLL_BASE_REDUCE(session, op, inbuf[inbi ^ 0x1], tmprecv, block_count, dtype);
 
         /* send previous block to send_to */
         ret = MCA_PML_CALL(send(tmprecv, block_count, dtype, send_to,
@@ -496,7 +497,7 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                     ((ptrdiff_t)recv_from * late_segcount + split_rank));
     block_count = ((recv_from < split_rank)? early_segcount : late_segcount);
     tmprecv = ((char*)rbuf) + (ptrdiff_t)block_offset * extent;
-    ompi_op_reduce(op, inbuf[inbi], tmprecv, block_count, dtype);
+    COLL_BASE_REDUCE(session, op, inbuf[inbi], tmprecv, block_count, dtype);
 
     /* Distribution loop - variation of ring allgather */
     send_to = (rank + 1) % size;
@@ -527,8 +528,8 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
 
     }
 
-    COLL_BASE_FREE(allocator, inbuf[0]);
-    COLL_BASE_FREE(allocator, inbuf[1]);
+    COLL_SESSION_FREE(session, inbuf[0]);
+    COLL_SESSION_FREE(session, inbuf[1]);
 
     return MPI_SUCCESS;
 
@@ -537,8 +538,8 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                  __FILE__, line, rank, ret));
     ompi_coll_base_free_reqs(reqs, 2);
     (void)line;  // silence compiler warning
-    COLL_BASE_FREE(allocator, inbuf[0]);
-    COLL_BASE_FREE(allocator, inbuf[1]);
+    COLL_SESSION_FREE(session, inbuf[0]);
+    COLL_SESSION_FREE(session, inbuf[1]);
     return ret;
 }
 
@@ -628,7 +629,7 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
                                                struct ompi_communicator_t *comm,
                                                mca_coll_base_module_t *module,
                                                uint32_t segsize,
-                                               mca_allocator_base_module_t *allocator)
+                                               ompi_op_gpu_session_t *session)
 {
     int ret, line, rank, size, k, recv_from, send_to;
     int early_blockcount, late_blockcount, split_rank;
@@ -664,7 +665,7 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
         if (count < (size_t) (size * segcount)) {
             OPAL_OUTPUT((ompi_coll_base_framework.framework_output, "coll:base:allreduce_ring_segmented rank %d/%d, count %zu, switching to regular ring", rank, size, count));
             return (ompi_coll_base_allreduce_intra_ring(sbuf, rbuf, count, dtype, op,
-                                                         comm, module, allocator));
+                                                         comm, module, session));
         }
 
     /* Determine the number of phases of the algorithm */
@@ -693,10 +694,10 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
      max_real_segsize = opal_datatype_span(&dtype->super, max_segcount, &gap);
 
     /* Allocate and initialize temporary buffers */
-    inbuf[0] = (char*)COLL_BASE_ALLOC(allocator, max_real_segsize);
+    inbuf[0] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
     if (NULL == inbuf[0]) { ret = -1; line = __LINE__; goto error_hndl; }
     if (size > 2) {
-        inbuf[1] = (char*)COLL_BASE_ALLOC(allocator, max_real_segsize);
+        inbuf[1] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
         if (NULL == inbuf[1]) { ret = -1; line = __LINE__; goto error_hndl; }
     }
 
@@ -787,7 +788,7 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
                             ((ptrdiff_t)phase * (ptrdiff_t)early_phase_segcount) :
                             ((ptrdiff_t)phase * (ptrdiff_t)late_phase_segcount + split_phase));
             tmprecv = ((char*)rbuf) + (ptrdiff_t)(block_offset + phase_offset) * extent;
-            ompi_op_reduce(op, inbuf[inbi ^ 0x1], tmprecv, phase_count, dtype);
+            COLL_BASE_REDUCE(session, op, inbuf[inbi ^ 0x1], tmprecv, phase_count, dtype);
 
             /* send previous block to send_to */
             ret = MCA_PML_CALL(send(tmprecv, phase_count, dtype, send_to,
@@ -816,7 +817,7 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
                         ((ptrdiff_t)phase * (ptrdiff_t)early_phase_segcount) :
                         ((ptrdiff_t)phase * (ptrdiff_t)late_phase_segcount + split_phase));
         tmprecv = ((char*)rbuf) + (ptrdiff_t)(block_offset + phase_offset) * extent;
-        ompi_op_reduce(op, inbuf[inbi], tmprecv, phase_count, dtype);
+        COLL_BASE_REDUCE(session, op, inbuf[inbi], tmprecv, phase_count, dtype);
     }
 
     /* Distribution loop - variation of ring allgather */
@@ -848,8 +849,8 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
 
     }
 
-    COLL_BASE_FREE(allocator, inbuf[0]);
-    COLL_BASE_FREE(allocator, inbuf[1]);
+    COLL_SESSION_FREE(session, inbuf[0]);
+    COLL_SESSION_FREE(session, inbuf[1]);
 
     return MPI_SUCCESS;
 
@@ -858,8 +859,8 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
                  __FILE__, line, rank, ret));
     ompi_coll_base_free_reqs(reqs, 2);
     (void)line;  // silence compiler warning
-    COLL_BASE_FREE(allocator, inbuf[0]);
-    COLL_BASE_FREE(allocator, inbuf[1]);
+    COLL_SESSION_FREE(session, inbuf[0]);
+    COLL_SESSION_FREE(session, inbuf[1]);
     return ret;
 }
 
@@ -978,7 +979,7 @@ ompi_coll_base_allreduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t
 int ompi_coll_base_allreduce_intra_redscat_allgather(
     const void *sbuf, void *rbuf, size_t count, struct ompi_datatype_t *dtype,
     struct ompi_op_t *op, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module, mca_allocator_base_module_t *allocator)
+    mca_coll_base_module_t *module, ompi_op_gpu_session_t *session)
 {
     int *rindex = NULL, *rcount = NULL, *sindex = NULL, *scount = NULL;
 
@@ -1010,7 +1011,7 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
 
     /* Temporary buffer for receiving messages */
     char *tmp_buf = NULL;
-    char *tmp_buf_raw = (char *)COLL_BASE_ALLOC(allocator, dsize);
+    char *tmp_buf_raw = (char *)COLL_SESSION_ALLOC(session, dsize);
     if (NULL == tmp_buf_raw)
         return OMPI_ERR_OUT_OF_RESOURCE;
     tmp_buf = tmp_buf_raw - gap;
@@ -1060,8 +1061,8 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Reduce on the right half of the buffers (result in rbuf) */
-            ompi_op_reduce(op, (char *)tmp_buf + (ptrdiff_t)count_lhalf * extent,
-                           (char *)rbuf + count_lhalf * extent, count_rhalf, dtype);
+            COLL_BASE_REDUCE(session, op, (char *)tmp_buf + (ptrdiff_t)count_lhalf * extent,
+                             (char *)rbuf + count_lhalf * extent, count_rhalf, dtype);
 
             /* Send the right half to the left neighbor */
             err = MCA_PML_CALL(send((char *)rbuf + (ptrdiff_t)count_lhalf * extent,
@@ -1088,7 +1089,7 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Reduce on the right half of the buffers (result in rbuf) */
-            ompi_op_reduce(op, tmp_buf, rbuf, count_lhalf, dtype);
+            COLL_BASE_REDUCE(session, op, tmp_buf, rbuf, count_lhalf, dtype);
 
             /* Recv the right half from the right neighbor */
             err = MCA_PML_CALL(recv((char *)rbuf + (ptrdiff_t)count_lhalf * extent,
@@ -1169,9 +1170,9 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
             if (MPI_SUCCESS != err) { goto cleanup_and_return; }
 
             /* Local reduce: rbuf[] = tmp_buf[] <op> rbuf[] */
-            ompi_op_reduce(op, (char *)tmp_buf + (ptrdiff_t)rindex[step] * extent,
-                           (char *)rbuf + (ptrdiff_t)rindex[step] * extent,
-                           rcount[step], dtype);
+            COLL_BASE_REDUCE(session, op, (char *)tmp_buf + (ptrdiff_t)rindex[step] * extent,
+                             (char *)rbuf + (ptrdiff_t)rindex[step] * extent,
+                             rcount[step], dtype);
 
             /* Move the current window to the received message */
             if (step + 1 < nsteps) {
@@ -1238,7 +1239,7 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
     }
 
   cleanup_and_return:
-    COLL_BASE_FREE(allocator, tmp_buf_raw);
+    COLL_SESSION_FREE(session, tmp_buf_raw);
     if (NULL != rindex)
         free(rindex);
     if (NULL != sindex)
@@ -1272,7 +1273,7 @@ int ompi_coll_base_allreduce_intra_allgather_reduce(const void *sbuf, void *rbuf
                                                     struct ompi_op_t *op,
                                                     struct ompi_communicator_t *comm,
                                                     mca_coll_base_module_t *module,
-                                                    mca_allocator_base_module_t *allocator)
+                                                    ompi_op_gpu_session_t *session)
 {
     int line = -1;
     char *partial_buf = NULL;
@@ -1293,10 +1294,10 @@ int ompi_coll_base_allreduce_intra_allgather_reduce(const void *sbuf, void *rbuf
     }
     ptrdiff_t buf_size, gap = 0;
     buf_size = opal_datatype_span(&dtype->super, (int64_t)count * size, &gap);
-    partial_buf = (char *) COLL_BASE_ALLOC(allocator, buf_size);
+    partial_buf = (char *) COLL_SESSION_ALLOC(session, buf_size);
     partial_buf_start = partial_buf - gap;
     buf_size = opal_datatype_span(&dtype->super, (int64_t)count, &gap);
-    tmpsend = (char *) COLL_BASE_ALLOC(allocator, buf_size);
+    tmpsend = (char *) COLL_SESSION_ALLOC(session, buf_size);
     tmpsend_start = tmpsend - gap;
 
     err = ompi_datatype_copy_content_same_ddt(dtype, count,
@@ -1311,11 +1312,11 @@ int ompi_coll_base_allreduce_intra_allgather_reduce(const void *sbuf, void *rbuf
     if (MPI_SUCCESS != err) { line = __LINE__; goto err_hndl; }
 
     for (int target = 1; target < size; target++) {
-        ompi_op_reduce(op,
-                       partial_buf_start + (ptrdiff_t)target * count * extent,
-                       partial_buf_start,
-                       count,
-                       dtype);
+        COLL_BASE_REDUCE(session, op,
+                         partial_buf_start + (ptrdiff_t)target * count * extent,
+                         partial_buf_start,
+                         count,
+                         dtype);
     }
 
     // move data to rbuf
@@ -1324,18 +1325,18 @@ int ompi_coll_base_allreduce_intra_allgather_reduce(const void *sbuf, void *rbuf
                                               (char*)partial_buf_start);
     if (MPI_SUCCESS != err) { line = __LINE__; goto err_hndl; }
 
-    COLL_BASE_FREE(allocator, partial_buf);
-    COLL_BASE_FREE(allocator, tmpsend);
+    COLL_SESSION_FREE(session, partial_buf);
+    COLL_SESSION_FREE(session, tmpsend);
     return MPI_SUCCESS;
 
 err_hndl:
     if (NULL != partial_buf) {
-        COLL_BASE_FREE(allocator, partial_buf);
+        COLL_SESSION_FREE(session, partial_buf);
         partial_buf = NULL;
         partial_buf_start = NULL;
     }
      if (NULL != tmpsend) {
-        COLL_BASE_FREE(allocator, tmpsend);
+        COLL_SESSION_FREE(session, tmpsend);
         tmpsend = NULL;
         tmpsend_start = NULL;
     }

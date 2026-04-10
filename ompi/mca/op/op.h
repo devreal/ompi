@@ -326,6 +326,34 @@ typedef struct ompi_op_base_module_1_0_0_t *
   (*ompi_op_base_component_op_query_1_0_0_fn_t)
     (struct ompi_op_t *op, int *priority);
 
+/* Forward declaration for GPU session (defined in ompi/op/op_gpu_session.h) */
+struct ompi_op_gpu_session_t;
+
+/**
+ * Optional component hook: create a GPU reduction session for the given
+ * (op, dtype) on a specific device.  Returns NULL if this component does
+ * not support the combination (caller tries the next component).
+ */
+typedef struct ompi_op_gpu_session_t *
+  (*ompi_op_base_component_session_begin_fn_t)(struct ompi_op_t *op,
+                                               struct ompi_datatype_t *dtype,
+                                               int dev_id);
+
+/**
+ * Optional component hook: post one reduction to the persistent kernel and
+ * block until done.
+ */
+typedef void (*ompi_op_base_component_session_reduce_fn_t)(
+                  struct ompi_op_gpu_session_t *session,
+                  const void *src, void *dst, size_t count);
+
+/**
+ * Optional component hook: shut down persistent kernel and free session.
+ * Must be NULL-safe.
+ */
+typedef void (*ompi_op_base_component_session_end_fn_t)(
+                  struct ompi_op_gpu_session_t *session);
+
 /**
  * Op component interface.
  *
@@ -343,6 +371,11 @@ typedef struct ompi_op_base_component_1_0_0_t {
     ompi_op_base_component_init_query_fn_t opc_init_query;
     /** Query whether component is usable for given op */
     ompi_op_base_component_op_query_1_0_0_fn_t opc_op_query;
+
+    /** Optional: GPU session lifecycle hooks.  NULL in host-only components. */
+    ompi_op_base_component_session_begin_fn_t  opc_session_begin;
+    ompi_op_base_component_session_reduce_fn_t opc_session_reduce;
+    ompi_op_base_component_session_end_fn_t    opc_session_end;
 } ompi_op_base_component_1_0_0_t;
 
 

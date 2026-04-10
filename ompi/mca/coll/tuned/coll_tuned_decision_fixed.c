@@ -216,8 +216,7 @@ ompi_coll_tuned_allreduce_intra_dec_fixed(const void *sbuf, void *rbuf, size_t c
         }
     }
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator. */
+    /* session=NULL uses host ompi_op_reduce path. */
     return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
                                                     comm, module, alg, 0, 0, NULL);
 }
@@ -889,8 +888,7 @@ int ompi_coll_tuned_reduce_intra_dec_fixed( const void *sendbuf, void *recvbuf,
         }
     }
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator. */
+    /* session=NULL uses host ompi_op_reduce path. */
     int faninout = 2;
     return  ompi_coll_tuned_reduce_intra_do_this (sendbuf, recvbuf, count, datatype,
                                                   op, root, comm, module,
@@ -1041,8 +1039,7 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_fixed( const void *sbuf, void *rbuf
         }
     }
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator. */
+    /* session=NULL uses host ompi_op_reduce path. */
     return  ompi_coll_tuned_reduce_scatter_intra_do_this (sbuf, rbuf, rcounts, dtype,
                                                           op, comm, module,
                                                           alg, 0, 0, NULL);
@@ -1164,8 +1161,7 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(const void *sbuf, void 
         }
     }
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator. */
+    /* session=NULL uses host ompi_op_reduce path. */
     return  ompi_coll_tuned_reduce_scatter_block_intra_do_this (sbuf, rbuf, rcount, dtype,
                                                                 op, comm, module,
                                                                 alg, 0, 0, NULL);

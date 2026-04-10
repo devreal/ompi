@@ -65,8 +65,7 @@ ompi_coll_tuned_allreduce_intra_dec_dynamic (const void *sbuf, void *rbuf, size_
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "ompi_coll_tuned_allreduce_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[ALLREDUCE].algorithm) {
@@ -323,8 +322,7 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCE].algorithm) {
@@ -384,8 +382,7 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_dynamic(const void *sbuf, void *rbu
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTER].algorithm) {
@@ -444,8 +441,7 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_dynamic(const void *sbuf, voi
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_block_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm) {
@@ -735,8 +731,7 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_exscan_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[EXSCAN].algorithm) {
@@ -783,8 +778,7 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_scan_intra_dec_dynamic"));
 
-    /* Scratch buffers are used for reductions (ompi_op_reduce); device-side
-     * reduction is not yet supported, so always use the host allocator (NULL). */
+    /* session=NULL uses host ompi_op_reduce path. */
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[SCAN].algorithm) {

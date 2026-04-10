@@ -37,6 +37,7 @@
 #include "ompi/info/info.h"
 #include "ompi/request/request.h"
 #include "opal/mca/allocator/allocator.h"
+#include "ompi/op/op_gpu_session.h"
 
 /* Allocator-aware helpers for Pattern-A scratch buffers.
  * Pass allocator=NULL to fall back to plain malloc/free. */
@@ -46,6 +47,24 @@
 #define COLL_BASE_FREE(allocator, ptr) \
     do { if (ptr) { if (allocator) (allocator)->alc_free((allocator), (ptr)); \
                     else free(ptr); } } while (0)
+
+/* GPU session-aware helpers for reduction scratch buffers.
+ * When session is non-NULL, use session->allocator; otherwise fall back to
+ * plain malloc/free.  Pass session=NULL for non-GPU collectives. */
+#define COLL_BASE_REDUCE(session, op, src, dst, count, dtype)                  \
+    do {                                                                        \
+        if (NULL != (session))                                                  \
+            ompi_op_gpu_session_reduce((session), (src), (dst), (count));      \
+        else                                                                    \
+            ompi_op_reduce((op), (src), (dst), (count), (dtype));              \
+    } while (0)
+
+#define COLL_SESSION_ALLOC(session, size) \
+    ((session) ? COLL_BASE_ALLOC((session)->allocator, (size)) : malloc(size))
+
+#define COLL_SESSION_FREE(session, ptr) \
+    do { if (session) { COLL_BASE_FREE((session)->allocator, (ptr)); } \
+         else { if (ptr) free(ptr); } } while (0)
 
 /* need to include our own topo prototypes so we can malloc data on the comm correctly */
 #include "coll_base_topo.h"
@@ -216,12 +235,12 @@ int ompi_coll_base_allgatherv_intra_two_procs(ALLGATHERV_ARGS);
 
 /* All Reduce */
 int ompi_coll_base_allreduce_intra_nonoverlapping(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_recursivedoubling(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_allreduce_intra_ring(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_allreduce_intra_ring_segmented(ALLREDUCE_ARGS, uint32_t segsize, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_allreduce_intra_recursivedoubling(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_allreduce_intra_ring(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_allreduce_intra_ring_segmented(ALLREDUCE_ARGS, uint32_t segsize, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_basic_linear(ALLREDUCE_ARGS);
-int ompi_coll_base_allreduce_intra_redscat_allgather(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_allreduce_intra_allgather_reduce(ALLREDUCE_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_allreduce_intra_redscat_allgather(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_allreduce_intra_allgather_reduce(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 
 /* AlltoAll */
 int ompi_coll_base_alltoall_intra_pairwise(ALLTOALL_ARGS);
@@ -265,7 +284,7 @@ int ompi_coll_base_bcast_intra_scatter_allgather(BCAST_ARGS, uint32_t segsize);
 int ompi_coll_base_bcast_intra_scatter_allgather_ring(BCAST_ARGS, uint32_t segsize);
 
 /* Exscan */
-int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_exscan_intra_linear(EXSCAN_ARGS);
 
 /* Gather */
@@ -276,30 +295,30 @@ int ompi_coll_base_gather_intra_linear_sync(GATHER_ARGS, int first_segment_size)
 /* GatherV */
 
 /* Reduce */
-int ompi_coll_base_reduce_generic(REDUCE_ARGS, ompi_coll_tree_t* tree, size_t count_by_segment, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_generic(REDUCE_ARGS, ompi_coll_tree_t* tree, size_t count_by_segment, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
 int ompi_coll_base_reduce_intra_basic_linear(REDUCE_ARGS);
-int ompi_coll_base_reduce_intra_chain(REDUCE_ARGS, uint32_t segsize, int fanout, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_pipeline(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_binomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_in_order_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_redscat_gather(REDUCE_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_intra_knomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, int radix, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_intra_chain(REDUCE_ARGS, uint32_t segsize, int fanout, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_pipeline(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_binomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_in_order_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_redscat_gather(REDUCE_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_intra_knomial(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, int radix, ompi_op_gpu_session_t *session);
 
 /* Reduce_scatter */
-int ompi_coll_base_reduce_scatter_intra_nonoverlapping(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_intra_basic_recursivehalving(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_intra_ring(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_intra_butterfly(REDUCESCATTER_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_intra_nonoverlapping(REDUCESCATTER_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_intra_basic_recursivehalving(REDUCESCATTER_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_intra_ring(REDUCESCATTER_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_intra_butterfly(REDUCESCATTER_ARGS, ompi_op_gpu_session_t *session);
 
 /* Reduce_scatter_block */
-int ompi_coll_base_reduce_scatter_block_basic_linear(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_block_intra_recursivedoubling(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_block_intra_recursivehalving(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
-int ompi_coll_base_reduce_scatter_block_intra_butterfly(REDUCESCATTERBLOCK_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_reduce_scatter_block_basic_linear(REDUCESCATTERBLOCK_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_block_intra_recursivedoubling(REDUCESCATTERBLOCK_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_block_intra_recursivehalving(REDUCESCATTERBLOCK_ARGS, ompi_op_gpu_session_t *session);
+int ompi_coll_base_reduce_scatter_block_intra_butterfly(REDUCESCATTERBLOCK_ARGS, ompi_op_gpu_session_t *session);
 
 /* Scan */
-int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS, mca_allocator_base_module_t *allocator);
+int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_scan_intra_linear(SCAN_ARGS);
 
 /* Scatter */
