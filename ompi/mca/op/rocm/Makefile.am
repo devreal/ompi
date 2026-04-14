@@ -19,8 +19,8 @@ sources = \
 # rule.  The resulting object is appended to LIBADD for both DSO and static
 # builds.
 
-EXTRA_DIST  = op_rocm_kernels.cpp
-CLEANFILES  = op_rocm_kernels.o
+rocm_sources  = op_rocm_kernels.cpp
+CLEANFILES    = op_rocm_kernels.o
 
 # Include paths forwarded to hipcc so it can find ompi_config.h and the
 # op/mca headers.
@@ -28,13 +28,18 @@ HIPCC_INCLUDES = \
     -I$(top_srcdir) \
     -I$(top_builddir) \
     -I$(top_srcdir)/ompi \
-    -I$(top_builddir)/ompi
+    -I$(top_builddir)/ompi \
+    -I$(top_builddir)/opal \
+    -I$(top_builddir)/opal/include \
+    -I$(top_srcdir)/ompi/include \
+    -I$(top_srcdir)/opal/include
 
-op_rocm_kernels.o: $(srcdir)/op_rocm_kernels.cpp \
+op_rocm_kernels.l$(OBJEXT): $(srcdir)/op_rocm_kernels.cpp \
                    $(srcdir)/op_rocm.h
-	$(HIPCC) $(HIPCCFLAGS) $(HIPCC_INCLUDES) \
+	$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile \
+		$(HIPCC) $(HIPCCFLAGS) $(HIPCC_INCLUDES) \
 	    $(op_rocm_CPPFLAGS) \
-	    -c $< -o $@
+	    -c $<
 
 AM_CPPFLAGS = $(op_rocm_CPPFLAGS)
 
@@ -54,7 +59,7 @@ mcacomponent_LTLIBRARIES = $(component_install)
 
 mca_op_rocm_la_SOURCES  = $(sources)
 mca_op_rocm_la_LDFLAGS  = -module -avoid-version $(op_rocm_LDFLAGS)
-mca_op_rocm_la_LIBADD   = $(op_rocm_LIBS) op_rocm_kernels.o
+mca_op_rocm_la_LIBADD   = $(rocm_sources:.cpp=.lo)
 mca_op_rocm_la_CPPFLAGS = $(op_rocm_CPPFLAGS)
 
 # ----------------------------------------------------------------------------
@@ -64,5 +69,5 @@ noinst_LTLIBRARIES = $(component_noinst)
 
 libmca_op_rocm_la_SOURCES  = $(sources)
 libmca_op_rocm_la_LDFLAGS  = -module -avoid-version $(op_rocm_LDFLAGS)
-libmca_op_rocm_la_LIBADD   = $(op_rocm_LIBS) op_rocm_kernels.o
+libmca_op_rocm_la_LIBADD   = $(op_rocm_LIBS) $(rocm_sources:.cpp=.lo)
 libmca_op_rocm_la_CPPFLAGS = $(op_rocm_CPPFLAGS)

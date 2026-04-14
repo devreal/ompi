@@ -50,6 +50,7 @@ AC_DEFUN([MCA_ompi_op_rocm_CONFIG],[
               op_rocm_happy=no])
       ])
 
+    OPAL_SUMMARY_ADD([Accelerators], [ROCm operator support], [], [$op_rocm_happy])
     # Default HIPCCFLAGS if not already set by the user.
     AS_IF([test "$op_rocm_happy" = "yes" && test "x$HIPCCFLAGS" = "x"],
           [HIPCCFLAGS="--offload-arch=gfx906"])
@@ -60,9 +61,10 @@ AC_DEFUN([MCA_ompi_op_rocm_CONFIG],[
     AC_SUBST([HIPCC])
     AC_SUBST([HIPCCFLAGS])
 
-    OPAL_VAR_SCOPE_POP
-
     AS_IF([test "$op_rocm_happy" = "yes"],
           [$1],
           [$2])
+
+    OPAL_VAR_SCOPE_POP
+
 ])dnl
