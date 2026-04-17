@@ -75,6 +75,7 @@ MCA_BASE_COMPONENT_INIT(ompi, op, cuda)
 static int
 cuda_component_open(void)
 {
+    ompi_op_cuda_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 

@@ -192,95 +192,60 @@ LAUNCHER(bxor_int64)  LAUNCHER(bxor_uint64)
  * 2D launcher table [op_index][type_index]
  *
  * Indexed by OMPI_OP_BASE_FORTRAN_* (rows) × OMPI_OP_BASE_TYPE_* (columns).
- * Zero/NULL entries mean "not supported on GPU" → host fallback.
+ * NULL entries mean "not supported on GPU" → host fallback.
+ *
+ * The table is zero-initialized here; ompi_op_cuda_kernel_fns_init() fills
+ * in the non-NULL entries at component open time.  This avoids designated
+ * initializers, which are C99/C11 and not supported by nvcc in C++ mode.
  * ========================================================================= */
 ompi_op_cuda_launcher_fn_t
-ompi_op_cuda_kernel_fns[OMPI_OP_BASE_FORTRAN_OP_MAX][OMPI_OP_BASE_TYPE_MAX] = {
+ompi_op_cuda_kernel_fns[OMPI_OP_BASE_FORTRAN_OP_MAX][OMPI_OP_BASE_TYPE_MAX];
 
-    [OMPI_OP_BASE_FORTRAN_MAX] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_max_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_max_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_max_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_max_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_max_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_max_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_max_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_max_uint64,
-        [OMPI_OP_BASE_TYPE_FLOAT]    = launch_max_float,
-        [OMPI_OP_BASE_TYPE_DOUBLE]   = launch_max_double,
-    },
+extern "C" void
+ompi_op_cuda_kernel_fns_init(void)
+{
+#define SET(op, type, fn) \
+    ompi_op_cuda_kernel_fns[OMPI_OP_BASE_FORTRAN_##op][OMPI_OP_BASE_TYPE_##type] = launch_##fn
 
-    [OMPI_OP_BASE_FORTRAN_MIN] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_min_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_min_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_min_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_min_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_min_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_min_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_min_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_min_uint64,
-        [OMPI_OP_BASE_TYPE_FLOAT]    = launch_min_float,
-        [OMPI_OP_BASE_TYPE_DOUBLE]   = launch_min_double,
-    },
+    SET(MAX, INT8_T,   max_int8);   SET(MAX, UINT8_T,  max_uint8);
+    SET(MAX, INT16_T,  max_int16);  SET(MAX, UINT16_T, max_uint16);
+    SET(MAX, INT32_T,  max_int32);  SET(MAX, UINT32_T, max_uint32);
+    SET(MAX, INT64_T,  max_int64);  SET(MAX, UINT64_T, max_uint64);
+    SET(MAX, FLOAT,    max_float);  SET(MAX, DOUBLE,   max_double);
 
-    [OMPI_OP_BASE_FORTRAN_SUM] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_sum_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_sum_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_sum_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_sum_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_sum_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_sum_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_sum_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_sum_uint64,
-        [OMPI_OP_BASE_TYPE_FLOAT]    = launch_sum_float,
-        [OMPI_OP_BASE_TYPE_DOUBLE]   = launch_sum_double,
-    },
+    SET(MIN, INT8_T,   min_int8);   SET(MIN, UINT8_T,  min_uint8);
+    SET(MIN, INT16_T,  min_int16);  SET(MIN, UINT16_T, min_uint16);
+    SET(MIN, INT32_T,  min_int32);  SET(MIN, UINT32_T, min_uint32);
+    SET(MIN, INT64_T,  min_int64);  SET(MIN, UINT64_T, min_uint64);
+    SET(MIN, FLOAT,    min_float);  SET(MIN, DOUBLE,   min_double);
 
-    [OMPI_OP_BASE_FORTRAN_PROD] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_prod_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_prod_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_prod_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_prod_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_prod_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_prod_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_prod_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_prod_uint64,
-        [OMPI_OP_BASE_TYPE_FLOAT]    = launch_prod_float,
-        [OMPI_OP_BASE_TYPE_DOUBLE]   = launch_prod_double,
-    },
+    SET(SUM, INT8_T,   sum_int8);   SET(SUM, UINT8_T,  sum_uint8);
+    SET(SUM, INT16_T,  sum_int16);  SET(SUM, UINT16_T, sum_uint16);
+    SET(SUM, INT32_T,  sum_int32);  SET(SUM, UINT32_T, sum_uint32);
+    SET(SUM, INT64_T,  sum_int64);  SET(SUM, UINT64_T, sum_uint64);
+    SET(SUM, FLOAT,    sum_float);  SET(SUM, DOUBLE,   sum_double);
 
-    [OMPI_OP_BASE_FORTRAN_BAND] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_band_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_band_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_band_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_band_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_band_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_band_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_band_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_band_uint64,
-    },
+    SET(PROD, INT8_T,  prod_int8);  SET(PROD, UINT8_T,  prod_uint8);
+    SET(PROD, INT16_T, prod_int16); SET(PROD, UINT16_T, prod_uint16);
+    SET(PROD, INT32_T, prod_int32); SET(PROD, UINT32_T, prod_uint32);
+    SET(PROD, INT64_T, prod_int64); SET(PROD, UINT64_T, prod_uint64);
+    SET(PROD, FLOAT,   prod_float); SET(PROD, DOUBLE,   prod_double);
 
-    [OMPI_OP_BASE_FORTRAN_BOR] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_bor_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_bor_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_bor_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_bor_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_bor_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_bor_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_bor_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_bor_uint64,
-    },
+    SET(BAND, INT8_T,  band_int8);  SET(BAND, UINT8_T,  band_uint8);
+    SET(BAND, INT16_T, band_int16); SET(BAND, UINT16_T, band_uint16);
+    SET(BAND, INT32_T, band_int32); SET(BAND, UINT32_T, band_uint32);
+    SET(BAND, INT64_T, band_int64); SET(BAND, UINT64_T, band_uint64);
 
-    [OMPI_OP_BASE_FORTRAN_BXOR] = {
-        [OMPI_OP_BASE_TYPE_INT8_T]   = launch_bxor_int8,
-        [OMPI_OP_BASE_TYPE_UINT8_T]  = launch_bxor_uint8,
-        [OMPI_OP_BASE_TYPE_INT16_T]  = launch_bxor_int16,
-        [OMPI_OP_BASE_TYPE_UINT16_T] = launch_bxor_uint16,
-        [OMPI_OP_BASE_TYPE_INT32_T]  = launch_bxor_int32,
-        [OMPI_OP_BASE_TYPE_UINT32_T] = launch_bxor_uint32,
-        [OMPI_OP_BASE_TYPE_INT64_T]  = launch_bxor_int64,
-        [OMPI_OP_BASE_TYPE_UINT64_T] = launch_bxor_uint64,
-    },
+    SET(BOR, INT8_T,   bor_int8);   SET(BOR, UINT8_T,  bor_uint8);
+    SET(BOR, INT16_T,  bor_int16);  SET(BOR, UINT16_T, bor_uint16);
+    SET(BOR, INT32_T,  bor_int32);  SET(BOR, UINT32_T, bor_uint32);
+    SET(BOR, INT64_T,  bor_int64);  SET(BOR, UINT64_T, bor_uint64);
+
+    SET(BXOR, INT8_T,  bxor_int8);  SET(BXOR, UINT8_T,  bxor_uint8);
+    SET(BXOR, INT16_T, bxor_int16); SET(BXOR, UINT16_T, bxor_uint16);
+    SET(BXOR, INT32_T, bxor_int32); SET(BXOR, UINT32_T, bxor_uint32);
+    SET(BXOR, INT64_T, bxor_int64); SET(BXOR, UINT64_T, bxor_uint64);
 
     /* LAND, LOR, LXOR, MAXLOC, MINLOC, REPLACE, NO_OP: all NULL → host path */
-};
+#undef SET
+}

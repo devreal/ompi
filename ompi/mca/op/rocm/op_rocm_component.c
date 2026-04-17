@@ -71,6 +71,7 @@ MCA_BASE_COMPONENT_INIT(ompi, op, rocm)
 static int
 rocm_component_open(void)
 {
+    ompi_op_rocm_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 
