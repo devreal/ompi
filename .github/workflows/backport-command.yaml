@@ -30,7 +30,6 @@ jobs:
         permissions:
             actions: write       # trigger workflow_dispatch
             issues: write        # post comments
-            pull-requests: read  # read PR merge status
         steps:
             - name: Parse command and validate PR
               id: parse
@@ -116,13 +115,9 @@ jobs:
                       }
 
                       // Confirm the PR is actually merged.
-                      const { data: pr } = await github.rest.pulls.get({
-                          owner:       context.repo.owner,
-                          repo:        context.repo.repo,
-                          pull_number: issueNumber,
-                      });
-
-                      if (!pr.merged) {
+                      // merged_at is present in the issue_comment webhook payload
+                      // for PRs, so no extra API call is needed.
+                      if (!context.payload.issue.pull_request.merged_at) {
                           await github.rest.issues.createComment({
                               owner:        context.repo.owner,
                               repo:         context.repo.repo,
