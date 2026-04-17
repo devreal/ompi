@@ -133,19 +133,13 @@ jobs:
                           return;
                       }
 
-                      // Acknowledge the command with a 👀 reaction.
-                      // Ignore 422 (reaction already exists) so re-runs don't fail.
-                      try {
-                          await github.rest.reactions.createForIssueComment({
-                              owner:      context.repo.owner,
-                              repo:       context.repo.repo,
-                              comment_id: commentId,
-                              content:    'eyes',
-                          });
-                      } catch (err) {
-                          // Non-critical — swallow all errors; a missing reaction
-                          // must not fail the overall step.
-                      }
+                      // Acknowledge the command with a comment.
+                      await github.rest.issues.createComment({
+                          owner:        context.repo.owner,
+                          repo:         context.repo.repo,
+                          issue_number: issueNumber,
+                          body:         `👀 Dispatching backport of this PR to: ${branches.map(b => `\`${b}\``).join(', ')}.`,
+                      });
 
                       core.setOutput('triggered', 'true');
                       core.setOutput('pr_number', String(issueNumber));
