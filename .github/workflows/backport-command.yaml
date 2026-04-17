@@ -41,6 +41,22 @@ jobs:
                       const issueNumber = context.payload.issue.number;
                       const login       = context.payload.comment.user.login;
 
+                      // Best-effort comment helper — if Issues are disabled on
+                      // the repo (common for forks) the call returns 403 and we
+                      // log a warning rather than aborting the workflow.
+                      async function tryComment(text) {
+                          try {
+                              await github.rest.issues.createComment({
+                                  owner:        context.repo.owner,
+                                  repo:         context.repo.repo,
+                                  issue_number: issueNumber,
+                                  body:         text,
+                              });
+                          } catch (err) {
+                              core.warning(`Could not post comment: ${err.message}`);
+                          }
+                      }
+
                       // Detect a bare /backport with no arguments and reply helpfully.
                       const bareMatch = /^\/backport\s*$/m.test(body);
                       // Look for /backport with arguments at the start of any line.
@@ -59,24 +75,14 @@ jobs:
                       // "Members" read permission unavailable to GITHUB_TOKEN).
                       const assoc = context.payload.comment.author_association;
                       if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(assoc)) {
-                          await github.rest.issues.createComment({
-                              owner:        context.repo.owner,
-                              repo:         context.repo.repo,
-                              issue_number: issueNumber,
-                              body:         `⚠️ @${login} Backports can only be triggered by repository owners, organization members, or collaborators.`,
-                          });
+                          await tryComment(`⚠️ @${login} Backports can only be triggered by repository owners, organization members, or collaborators.`);
                           core.setOutput('triggered', 'false');
                           return;
                       }
 
                       if (bareMatch && !match) {
                           core.setOutput('triggered', 'false');
-                          await github.rest.issues.createComment({
-                              owner:        context.repo.owner,
-                              repo:         context.repo.repo,
-                              issue_number: issueNumber,
-                              body:         '⚠️ `/backport` requires at least one target branch, e.g. `/backport v5.0.x`.',
-                          });
+                          await tryComment('⚠️ `/backport` requires at least one target branch, e.g. `/backport v5.0.x`.');
                           return;
                       }
                       if (!match) {
@@ -89,12 +95,7 @@ jobs:
                       if (branches.length === 0) {
                           // e.g. "/backport ,,," — separators only, no real branch names
                           core.setOutput('triggered', 'false');
-                          await github.rest.issues.createComment({
-                              owner:        context.repo.owner,
-                              repo:         context.repo.repo,
-                              issue_number: issueNumber,
-                              body:         '⚠️ `/backport` requires at least one target branch, e.g. `/backport v5.0.x`.',
-                          });
+                          await tryComment('⚠️ `/backport` requires at least one target branch, e.g. `/backport v5.0.x`.');
                           return;
                       }
 
@@ -105,12 +106,7 @@ jobs:
                       const invalidBranches = branches.filter(b => !validBranchRe.test(b));
                       if (invalidBranches.length > 0) {
                           core.setOutput('triggered', 'false');
-                          await github.rest.issues.createComment({
-                              owner:        context.repo.owner,
-                              repo:         context.repo.repo,
-                              issue_number: issueNumber,
-                              body:         `⚠️ Invalid branch name(s): ${invalidBranches.map(b => `\`${b}\``).join(', ')}. Branch names may only contain alphanumeric characters, dots, hyphens, underscores, and slashes.`,
-                          });
+                          await tryComment(`⚠️ Invalid branch name(s): ${invalidBranches.map(b => `\`${b}\``).join(', ')}. Branch names may only contain alphanumeric characters, dots, hyphens, underscores, and slashes.`);
                           return;
                       }
 
@@ -118,23 +114,13 @@ jobs:
                       // merged_at is present in the issue_comment webhook payload
                       // for PRs, so no extra API call is needed.
                       if (!context.payload.issue.pull_request.merged_at) {
-                          await github.rest.issues.createComment({
-                              owner:        context.repo.owner,
-                              repo:         context.repo.repo,
-                              issue_number: issueNumber,
-                              body:         '⚠️ Cannot backport: this PR has not been merged yet.',
-                          });
+                          await tryComment('⚠️ Cannot backport: this PR has not been merged yet.');
                           core.setOutput('triggered', 'false');
                           return;
                       }
 
                       // Acknowledge the command with a comment.
-                      await github.rest.issues.createComment({
-                          owner:        context.repo.owner,
-                          repo:         context.repo.repo,
-                          issue_number: issueNumber,
-                          body:         `👀 Dispatching backport of this PR to: ${branches.map(b => `\`${b}\``).join(', ')}.`,
-                      });
+                      await tryComment(`👀 Dispatching backport of this PR to: ${branches.map(b => `\`${b}\``).join(', ')}.`);
 
                       core.setOutput('triggered', 'true');
                       core.setOutput('pr_number', String(issueNumber));
