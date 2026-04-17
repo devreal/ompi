@@ -31,7 +31,6 @@ jobs:
             actions: write       # trigger workflow_dispatch
             issues: write        # post comments
             pull-requests: read  # read PR merge status
-            reactions: write     # acknowledge command with 👀 reaction
         steps:
             - name: Parse command and validate PR
               id: parse
@@ -144,7 +143,8 @@ jobs:
                               content:    'eyes',
                           });
                       } catch (err) {
-                          if (err.status !== 422) throw err;
+                          // Non-critical — swallow all errors; a missing reaction
+                          // must not fail the overall step.
                       }
 
                       core.setOutput('triggered', 'true');
