@@ -34,7 +34,7 @@ jobs:
         steps:
             - name: Parse command and validate PR
               id: parse
-              uses: actions/github-script@v7
+              uses: actions/github-script@v8
               with:
                   script: |
                       const body        = context.payload.comment.body;
@@ -54,30 +54,17 @@ jobs:
                           return;
                       }
 
-                      // Check actual repository permission level rather than
-                      // author_association: MEMBER alone does not imply write
-                      // access on org-owned public repos.
-                      let permission = 'none';
-                      try {
-                          const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                              owner:    context.repo.owner,
-                              repo:     context.repo.repo,
-                              username: login,
-                          });
-                          // Use role_name rather than permission: the legacy
-                          // permission field collapses 'maintain' into 'write',
-                          // losing the distinction between the two tiers.
-                          permission = data.role_name; // 'admin' | 'maintain' | 'write' | 'triage' | 'read'
-                      } catch (err) {
-                          if (err.status !== 404) throw err;
-                          // 404 = not a collaborator; permission stays 'none'
-                      }
-                      if (!['admin', 'maintain', 'write'].includes(permission)) {
+                      // Use author_association from the webhook payload — no extra
+                      // API call required. GITHUB_TOKEN cannot call
+                      // getCollaboratorPermissionLevel on org repos (needs org-level
+                      // "Members" read permission unavailable to GITHUB_TOKEN).
+                      const assoc = context.payload.comment.author_association;
+                      if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(assoc)) {
                           await github.rest.issues.createComment({
                               owner:        context.repo.owner,
                               repo:         context.repo.repo,
                               issue_number: issueNumber,
-                              body:         `⚠️ @${login} Backports can only be triggered by users with write, maintain, or admin access.`,
+                              body:         `⚠️ @${login} Backports can only be triggered by repository owners, organization members, or collaborators.`,
                           });
                           core.setOutput('triggered', 'false');
                           return;
@@ -166,7 +153,7 @@ jobs:
 
             - name: Trigger backport workflow
               if: steps.parse.outputs.triggered == 'true'
-              uses: actions/github-script@v7
+              uses: actions/github-script@v8
               env:
                   PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
                   BRANCHES:  ${{ steps.parse.outputs.branches }}
