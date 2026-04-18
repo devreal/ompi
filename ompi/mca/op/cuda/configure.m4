@@ -100,9 +100,11 @@ AC_DEFUN([MCA_ompi_op_cuda_CONFIG],[
     AC_SUBST([NVCC])
     AC_SUBST([NVCCFLAGS])
 
-    OPAL_VAR_SCOPE_POP
-
+    OPAL_SUMMARY_ADD([Accelerators], [CUDA operator support], [], [$op_cuda_happy])
     AS_IF([test "$op_cuda_happy" = "yes"],
           [$1],
           [$2])
+
+    OPAL_VAR_SCOPE_POP
+
 ])dnl

@@ -19,8 +19,8 @@ sources = \
 # rule.  The resulting object is appended to LIBADD for both DSO and static
 # builds.
 
-EXTRA_DIST  = op_cuda_kernels.cu
-CLEANFILES  = op_cuda_kernels.o
+cuda_sources = op_cuda_kernels.cu
+CLEANFILES   = op_cuda_kernels.o
 
 # Include paths forwarded to nvcc so it can find ompi_config.h and the
 # op/mca headers.
@@ -28,14 +28,18 @@ NVCC_INCLUDES = \
     -I$(top_srcdir) \
     -I$(top_builddir) \
     -I$(top_srcdir)/ompi \
-    -I$(top_builddir)/ompi
+    -I$(top_srcdir)/ompi/include \
+    -I$(top_srcdir)/opal \
+    -I$(top_srcdir)/opal/include \
+    -I$(top_builddir)/ompi \
+    -I$(top_builddir)/opal \
+    -I$(top_builddir)/opal/include
 
-op_cuda_kernels.o: $(srcdir)/op_cuda_kernels.cu \
+op_cuda_kernels.l$(OBJEXT): $(srcdir)/op_cuda_kernels.cu \
                    $(srcdir)/op_cuda.h
-	$(NVCC) $(NVCCFLAGS) $(NVCC_INCLUDES) \
+	$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(NVCC) -prefer-non-pic $(NVCCFLAGS) -Wc,-Xcompiler,-fPIC $(NVCC_INCLUDES) \
 	    $(op_cuda_CPPFLAGS) \
-	    --compiler-options "$(DEFS)" \
-	    -c $< -o $@
+	    -c $<
 
 AM_CPPFLAGS = $(op_cuda_CPPFLAGS)
 
@@ -55,7 +59,7 @@ mcacomponent_LTLIBRARIES = $(component_install)
 
 mca_op_cuda_la_SOURCES  = $(sources)
 mca_op_cuda_la_LDFLAGS  = -module -avoid-version $(op_cuda_LDFLAGS)
-mca_op_cuda_la_LIBADD   = $(op_cuda_LIBS) op_cuda_kernels.o
+mca_op_cuda_la_LIBADD   = $(op_cuda_LIBS) $(cuda_sources:.cu=.lo)
 mca_op_cuda_la_CPPFLAGS = $(op_cuda_CPPFLAGS)
 
 # ----------------------------------------------------------------------------
@@ -65,5 +69,5 @@ noinst_LTLIBRARIES = $(component_noinst)
 
 libmca_op_cuda_la_SOURCES  = $(sources)
 libmca_op_cuda_la_LDFLAGS  = -module -avoid-version $(op_cuda_LDFLAGS)
-libmca_op_cuda_la_LIBADD   = $(op_cuda_LIBS) op_cuda_kernels.o
+libmca_op_cuda_la_LIBADD   = $(op_cuda_LIBS) $(cuda_sources:.cu=.lo)
 libmca_op_cuda_la_CPPFLAGS = $(op_cuda_CPPFLAGS)
