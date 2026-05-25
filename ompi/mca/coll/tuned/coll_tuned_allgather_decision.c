@@ -133,7 +133,8 @@ int ompi_coll_tuned_allgather_intra_do_this(const void *sbuf, size_t scount,
                                             struct ompi_datatype_t *rdtype,
                                             struct ompi_communicator_t *comm,
                                             mca_coll_base_module_t *module,
-                                            int algorithm, int faninout, int segsize)
+                                            int algorithm, int faninout, int segsize,
+                                            mca_allocator_base_module_t *allocator)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "coll:tuned:allgather_intra_do_this selected algorithm %d topo faninout %d segsize %d",
@@ -150,7 +151,7 @@ int ompi_coll_tuned_allgather_intra_do_this(const void *sbuf, size_t scount,
     case (2):
         return ompi_coll_base_allgather_intra_k_bruck(sbuf, scount, sdtype,
                                                       rbuf, rcount, rdtype,
-                                                      comm, module, faninout);
+                                                      comm, module, faninout, allocator);
     case (3):
         return ompi_coll_base_allgather_intra_recursivedoubling(sbuf, scount, sdtype,
                                                                 rbuf, rcount, rdtype,

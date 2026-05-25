@@ -36,6 +36,7 @@
 #include "ompi/mca/coll/coll.h"
 #include "ompi/mca/coll/base/coll_tags.h"
 #include "ompi/op/op.h"
+#include "ompi/op/op_gpu_session.h"
 #include "coll_tuned.h"
 
 /*
@@ -216,9 +217,19 @@ ompi_coll_tuned_allreduce_intra_dec_fixed(const void *sbuf, void *rbuf, size_t c
         }
     }
 
-    /* session=NULL uses host ompi_op_reduce path. */
-    return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
-                                                    comm, module, alg, 0, 0, NULL);
+    {
+        ompi_op_gpu_session_t *session = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
+        }
+        int rc = ompi_coll_tuned_allreduce_intra_do_this(sbuf, rbuf, count, dtype, op,
+                                                         comm, module, alg, 0, 0, session);
+        ompi_op_gpu_session_end(session);
+        return rc;
+    }
 }
 
 
@@ -1076,11 +1087,21 @@ int ompi_coll_tuned_reduce_intra_dec_fixed( const void *sendbuf, void *recvbuf,
         }
     }
 
-    /* session=NULL uses host ompi_op_reduce path. */
-    int faninout = 2;
-    return  ompi_coll_tuned_reduce_intra_do_this (sendbuf, recvbuf, count, datatype,
-                                                  op, root, comm, module,
-                                                  alg, faninout, 0, 0, NULL);
+    {
+        ompi_op_gpu_session_t *session = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sendbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sendbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(recvbuf, &_dev_id, &_flags) > 0) {
+            session = ompi_op_gpu_session_begin(op, datatype, _dev_id);
+        }
+        int faninout = 2;
+        int rc = ompi_coll_tuned_reduce_intra_do_this(sendbuf, recvbuf, count, datatype,
+                                                      op, root, comm, module,
+                                                      alg, faninout, 0, 0, session);
+        ompi_op_gpu_session_end(session);
+        return rc;
+    }
 }
 
 /*
@@ -1227,10 +1248,20 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_fixed( const void *sbuf, void *rbuf
         }
     }
 
-    /* session=NULL uses host ompi_op_reduce path. */
-    return  ompi_coll_tuned_reduce_scatter_intra_do_this (sbuf, rbuf, rcounts, dtype,
-                                                          op, comm, module,
-                                                          alg, 0, 0, NULL);
+    {
+        ompi_op_gpu_session_t *session = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
+        }
+        int rc = ompi_coll_tuned_reduce_scatter_intra_do_this(sbuf, rbuf, rcounts, dtype,
+                                                              op, comm, module,
+                                                              alg, 0, 0, session);
+        ompi_op_gpu_session_end(session);
+        return rc;
+    }
 }
 
 /*
@@ -1349,10 +1380,20 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(const void *sbuf, void 
         }
     }
 
-    /* session=NULL uses host ompi_op_reduce path. */
-    return  ompi_coll_tuned_reduce_scatter_block_intra_do_this (sbuf, rbuf, rcount, dtype,
-                                                                op, comm, module,
-                                                                alg, 0, 0, NULL);
+    {
+        ompi_op_gpu_session_t *session = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
+        }
+        int rc = ompi_coll_tuned_reduce_scatter_block_intra_do_this(sbuf, rbuf, rcount, dtype,
+                                                                    op, comm, module,
+                                                                    alg, 0, 0, session);
+        ompi_op_gpu_session_end(session);
+        return rc;
+    }
 }
 
 /*
@@ -1497,10 +1538,21 @@ int ompi_coll_tuned_allgather_intra_dec_fixed(const void *sbuf, size_t scount,
         "ompi_coll_tuned_allgather_intra_dec_fixed rank %d com_size %d",
         ompi_comm_rank(comm), communicator_size));
 
-    int faninout = 2;
-    return ompi_coll_tuned_allgather_intra_do_this(sbuf, scount, sdtype,
-                                                   rbuf, rcount, rdtype,
-                                                   comm, module, alg, faninout, 0);
+    {
+        mca_allocator_base_module_t *allocator = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+        int faninout = 2;
+        return ompi_coll_tuned_allgather_intra_do_this(sbuf, scount, sdtype,
+                                                       rbuf, rcount, rdtype,
+                                                       comm, module, alg, faninout, 0,
+                                                       allocator);
+    }
 }
 
 /*
@@ -1662,7 +1714,6 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
 {
     int communicator_size, alg, rank;
     size_t dsize, total_dsize;
-    mca_allocator_base_module_t *allocator = NULL;
 
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
                  "ompi_coll_tuned_gather_intra_dec_fixed"));
@@ -1727,9 +1778,8 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
         alg = 2;
     }
 
-    /* Scratch buffer is used for data movement only (no ompi_op_reduce).
-     * Use device allocator when user buffers are on device. */
     {
+        mca_allocator_base_module_t *allocator = NULL;
         int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
         uint64_t _flags;
         if ((sbuf != MPI_IN_PLACE &&
@@ -1737,11 +1787,11 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
             opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
             allocator = opal_accelerator_base_get_device_allocator(_dev_id);
         }
+        return ompi_coll_tuned_gather_intra_do_this(sbuf, scount, sdtype,
+                                                    rbuf, rcount, rdtype,
+                                                    root, comm, module,
+                                                    alg, 0, 0, allocator);
     }
-    return ompi_coll_tuned_gather_intra_do_this (sbuf, scount, sdtype,
-                                                 rbuf, rcount, rdtype,
-                                                 root, comm, module,
-                                                 alg, 0, 0, allocator);
 }
 
 /*
@@ -1843,8 +1893,18 @@ int ompi_coll_tuned_scatter_intra_dec_fixed(const void *sbuf, size_t scount,
         }
     }
 
-    return ompi_coll_tuned_scatter_intra_do_this (sbuf, scount, sdtype,
-                                                  rbuf, rcount, rdtype,
-                                                  root, comm, module,
-                                                  alg, 0, 0);
+    {
+        mca_allocator_base_module_t *allocator = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+        return ompi_coll_tuned_scatter_intra_do_this(sbuf, scount, sdtype,
+                                                     rbuf, rcount, rdtype,
+                                                     root, comm, module,
+                                                     alg, 0, 0, allocator);
+    }
 }

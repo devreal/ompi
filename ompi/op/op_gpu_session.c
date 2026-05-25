@@ -41,6 +41,7 @@
 #include <stdlib.h>
 
 #include "opal/class/opal_list.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "opal/mca/base/base.h"
 #include "opal/mca/threads/mutex.h"
 #include "ompi/mca/op/op.h"
@@ -146,13 +147,48 @@ ompi_op_gpu_session_begin(struct ompi_op_t *op,
 }
 
 /* --------------------------------------------------------------------------
+ * ompi_op_gpu_session_begin_alloc
+ *
+ * Create a lightweight session with GPU scratch-memory allocation only.
+ * No persistent kernel is launched; reduce_fn and the other kernel hooks are
+ * NULL.  The session is freed directly by session_end (not pooled) because
+ * it holds no GPU stream or managed memory of its own.
+ * -------------------------------------------------------------------------- */
+ompi_op_gpu_session_t *
+ompi_op_gpu_session_begin_alloc(int dev_id)
+{
+    mca_allocator_base_module_t *allocator =
+        opal_accelerator_base_get_device_allocator(dev_id);
+    if (NULL == allocator) {
+        return NULL;
+    }
+
+    ompi_op_gpu_session_t *session =
+        (ompi_op_gpu_session_t *) malloc(sizeof(ompi_op_gpu_session_t));
+    if (NULL == session) {
+        return NULL;
+    }
+
+    session->dev_id     = dev_id;
+    session->allocator  = allocator;
+    session->backend    = NULL;
+    session->reduce_fn  = NULL;
+    session->stop_fn    = NULL;
+    session->restart_fn = NULL;
+    session->free_fn    = NULL;
+    session->pool_next  = NULL;
+    return session;
+}
+
+/* --------------------------------------------------------------------------
  * ompi_op_gpu_session_reduce
  * -------------------------------------------------------------------------- */
 void
 ompi_op_gpu_session_reduce(ompi_op_gpu_session_t *session,
-                           const void *src, void *dst, size_t count)
+                           const void *src1, const void *src2,
+                           void *dst, size_t count)
 {
-    session->reduce_fn(session, src, dst, count);
+    session->reduce_fn(session, src1, src2, dst, count);
 }
 
 /* --------------------------------------------------------------------------
@@ -166,6 +202,13 @@ void
 ompi_op_gpu_session_end(ompi_op_gpu_session_t *session)
 {
     if (NULL == session) {
+        return;
+    }
+
+    /* Alloc-only sessions (stop_fn == NULL) hold no kernel resources.
+     * Free the struct immediately; they are not pooled. */
+    if (NULL == session->stop_fn) {
+        free(session);
         return;
     }
 

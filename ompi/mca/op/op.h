@@ -345,7 +345,7 @@ typedef struct ompi_op_gpu_session_t *
  */
 typedef void (*ompi_op_base_component_session_reduce_fn_t)(
                   struct ompi_op_gpu_session_t *session,
-                  const void *src, void *dst, size_t count);
+                  const void *src1, const void *src2, void *dst, size_t count);
 
 /**
  * Optional component hook: signal the persistent kernel to exit and

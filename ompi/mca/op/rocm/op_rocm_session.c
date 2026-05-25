@@ -40,6 +40,7 @@
 
 #include <hip/hip_runtime.h>
 
+#include "opal/mca/accelerator/base/base.h"
 #include "ompi/op/op.h"
 #include "ompi/datatype/ompi_datatype.h"
 #include "ompi/op/op_gpu_session.h"
@@ -97,7 +98,8 @@ ompi_op_rocm_session_begin(struct ompi_op_t *op,
         free(session);
         return NULL;
     }
-    priv->cmd->src    = NULL;
+    priv->cmd->src1   = NULL;
+    priv->cmd->src2   = NULL;
     priv->cmd->dst    = NULL;
     priv->cmd->count  = 0;
     priv->cmd->status = 0;
@@ -137,7 +139,7 @@ ompi_op_rocm_session_begin(struct ompi_op_t *op,
     }
 
     session->dev_id    = dev_id;
-    session->allocator = NULL;   /* scratch allocator wired in Phase 4 */
+    session->allocator = opal_accelerator_base_get_device_allocator(dev_id);
     session->backend   = priv;
 
     return session;
@@ -148,13 +150,15 @@ ompi_op_rocm_session_begin(struct ompi_op_t *op,
  * -------------------------------------------------------------------------- */
 void
 ompi_op_rocm_session_reduce(ompi_op_gpu_session_t *session,
-                             const void *src, void *dst, size_t count)
+                             const void *src1, const void *src2,
+                             void *dst, size_t count)
 {
     ompi_op_rocm_session_priv_t *priv =
         (ompi_op_rocm_session_priv_t *) session->backend;
 
     /* Write operands before signalling the kernel */
-    priv->cmd->src   = src;
+    priv->cmd->src1  = src1;
+    priv->cmd->src2  = src2;
     priv->cmd->dst   = dst;
     priv->cmd->count = (int64_t) count;
 
@@ -222,7 +226,8 @@ ompi_op_rocm_session_restart(ompi_op_gpu_session_t *session,
 
     /* Reset state for the new kernel */
     *priv->shutdown   = 0;
-    priv->cmd->src    = NULL;
+    priv->cmd->src1   = NULL;
+    priv->cmd->src2   = NULL;
     priv->cmd->dst    = NULL;
     priv->cmd->count  = 0;
     priv->cmd->status = 0;

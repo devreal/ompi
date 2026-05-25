@@ -103,7 +103,7 @@ ompi_coll_tuned_comm_query(struct ompi_communicator_t *comm, int *priority);
 /* All Gather */
 int ompi_coll_tuned_allgather_intra_dec_fixed(ALLGATHER_ARGS);
 int ompi_coll_tuned_allgather_intra_dec_dynamic(ALLGATHER_ARGS);
-int ompi_coll_tuned_allgather_intra_do_this(ALLGATHER_ARGS, int algorithm, int faninout, int segsize);
+int ompi_coll_tuned_allgather_intra_do_this(ALLGATHER_ARGS, int algorithm, int faninout, int segsize, mca_allocator_base_module_t *allocator);
 int ompi_coll_tuned_allgather_intra_check_forced_init(coll_tuned_force_algorithm_mca_param_indices_t *mca_param_indices);
 
 /* All GatherV */
@@ -171,7 +171,7 @@ int ompi_coll_tuned_reduce_scatter_block_intra_check_forced_init (coll_tuned_for
 /* Scatter */
 int ompi_coll_tuned_scatter_intra_dec_fixed(SCATTER_ARGS);
 int ompi_coll_tuned_scatter_intra_dec_dynamic(SCATTER_ARGS);
-int ompi_coll_tuned_scatter_intra_do_this(SCATTER_ARGS, int algorithm, int faninout, int segsize);
+int ompi_coll_tuned_scatter_intra_do_this(SCATTER_ARGS, int algorithm, int faninout, int segsize, mca_allocator_base_module_t *allocator);
 int ompi_coll_tuned_scatter_intra_check_forced_init (coll_tuned_force_algorithm_mca_param_indices_t *mca_param_indices);
 
 /* Exscan */

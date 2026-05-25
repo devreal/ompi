@@ -32,7 +32,8 @@ struct ompi_datatype_t;
  *   2 = done       (kernel → host: reduction complete)
  */
 typedef struct {
-    const void      *src;
+    const void      *src1;
+    const void      *src2;
     void            *dst;
     int64_t          count;
     volatile int32_t status;
@@ -61,7 +62,7 @@ typedef struct ompi_op_gpu_session_t {
     void                        *backend;    /* opaque: cuda or rocm session state */
     /* Dispatch hooks wired at session_begin time. */
     void (*reduce_fn)(struct ompi_op_gpu_session_t *session,
-                      const void *src, void *dst, size_t count);
+                      const void *src1, const void *src2, void *dst, size_t count);
     /* Signal the persistent kernel to exit and synchronize the stream.
      * GPU stream and managed memory remain allocated for reuse. */
     void (*stop_fn)(struct ompi_op_gpu_session_t *session);
@@ -88,11 +89,22 @@ OMPI_DECLSPEC ompi_op_gpu_session_t *ompi_op_gpu_session_begin(struct ompi_op_t 
                                                                 int dev_id);
 
 /**
- * Post one reduction command (src op dst → dst) to the persistent kernel and
- * wait for completion.  Behavior is undefined if session is NULL.
+ * Create a lightweight session that provides GPU scratch-memory allocation only,
+ * without launching a persistent reduction kernel.  Suitable for collective
+ * algorithms that need temporary device memory but perform no GPU reduction.
+ * Returns NULL if no device allocator is available for dev_id.
+ * The returned session is freed by ompi_op_gpu_session_end().
+ */
+OMPI_DECLSPEC ompi_op_gpu_session_t *ompi_op_gpu_session_begin_alloc(int dev_id);
+
+/**
+ * Post one reduction command (src1 op src2 → dst) to the persistent kernel and
+ * wait for completion.  src2 may alias dst for in-place operations.
+ * Behavior is undefined if session is NULL.
  */
 OMPI_DECLSPEC void ompi_op_gpu_session_reduce(ompi_op_gpu_session_t *session,
-                                               const void *src, void *dst, size_t count);
+                                               const void *src1, const void *src2,
+                                               void *dst, size_t count);
 
 /**
  * Stop the persistent kernel and return the session to the pool for reuse.

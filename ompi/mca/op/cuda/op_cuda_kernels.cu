@@ -31,8 +31,8 @@
  * PERSISTENT_KERNEL(name, ctype, op_expr)
  *
  * Generates __global__ void ompi_op_cuda_persistent_<name>(...).
- * op_expr must be a statement that updates dst[i] in-place using src[i],
- * e.g. "dst[i] += src[i]" or "dst[i] = dst[i] > src[i] ? dst[i] : src[i]".
+ * op_expr must be a statement writing dst[i] from src1[i] and src2[i],
+ * e.g. "dst[i] = src1[i] + src2[i]".  src2 may alias dst for in-place ops.
  * ------------------------------------------------------------------------- */
 #define PERSISTENT_KERNEL(kname, ctype, op_expr)                               \
 __global__ void ompi_op_cuda_persistent_##kname(                               \
@@ -42,8 +42,9 @@ __global__ void ompi_op_cuda_persistent_##kname(                               \
         /* Spin-wait for work; sleep 1 µs between polls to save power */        \
         while (cmd->status != 1 && !*shutdown) { __nanosleep(1000); }          \
         if (*shutdown) break;                                                   \
-        const ctype * __restrict__ src = (const ctype *) cmd->src;             \
-              ctype * __restrict__ dst = (      ctype *) cmd->dst;             \
+        const ctype * __restrict__ src1 = (const ctype *) cmd->src1;           \
+        const ctype * __restrict__ src2 = (const ctype *) cmd->src2;           \
+              ctype * __restrict__ dst  = (      ctype *) cmd->dst;            \
         int64_t n = cmd->count;                                                 \
         for (int64_t i = (int64_t)threadIdx.x; i < n; i += blockDim.x) {      \
             op_expr;                                                            \
@@ -61,82 +62,82 @@ __global__ void ompi_op_cuda_persistent_##kname(                               \
  * ========================================================================= */
 
 /* --- MAX --- */
-PERSISTENT_KERNEL(max_int8,   int8_t,   dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_uint8,  uint8_t,  dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_int16,  int16_t,  dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_uint16, uint16_t, dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_int32,  int32_t,  dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_uint32, uint32_t, dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_int64,  int64_t,  dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_uint64, uint64_t, dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_float,  float,    dst[i] = dst[i] > src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(max_double, double,   dst[i] = dst[i] > src[i] ? dst[i] : src[i])
+PERSISTENT_KERNEL(max_int8,   int8_t,   dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_uint8,  uint8_t,  dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_int16,  int16_t,  dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_uint16, uint16_t, dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_int32,  int32_t,  dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_uint32, uint32_t, dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_int64,  int64_t,  dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_uint64, uint64_t, dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_float,  float,    dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(max_double, double,   dst[i] = src1[i] > src2[i] ? src1[i] : src2[i])
 
 /* --- MIN --- */
-PERSISTENT_KERNEL(min_int8,   int8_t,   dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_uint8,  uint8_t,  dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_int16,  int16_t,  dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_uint16, uint16_t, dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_int32,  int32_t,  dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_uint32, uint32_t, dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_int64,  int64_t,  dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_uint64, uint64_t, dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_float,  float,    dst[i] = dst[i] < src[i] ? dst[i] : src[i])
-PERSISTENT_KERNEL(min_double, double,   dst[i] = dst[i] < src[i] ? dst[i] : src[i])
+PERSISTENT_KERNEL(min_int8,   int8_t,   dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_uint8,  uint8_t,  dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_int16,  int16_t,  dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_uint16, uint16_t, dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_int32,  int32_t,  dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_uint32, uint32_t, dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_int64,  int64_t,  dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_uint64, uint64_t, dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_float,  float,    dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
+PERSISTENT_KERNEL(min_double, double,   dst[i] = src1[i] < src2[i] ? src1[i] : src2[i])
 
 /* --- SUM --- */
-PERSISTENT_KERNEL(sum_int8,   int8_t,   dst[i] += src[i])
-PERSISTENT_KERNEL(sum_uint8,  uint8_t,  dst[i] += src[i])
-PERSISTENT_KERNEL(sum_int16,  int16_t,  dst[i] += src[i])
-PERSISTENT_KERNEL(sum_uint16, uint16_t, dst[i] += src[i])
-PERSISTENT_KERNEL(sum_int32,  int32_t,  dst[i] += src[i])
-PERSISTENT_KERNEL(sum_uint32, uint32_t, dst[i] += src[i])
-PERSISTENT_KERNEL(sum_int64,  int64_t,  dst[i] += src[i])
-PERSISTENT_KERNEL(sum_uint64, uint64_t, dst[i] += src[i])
-PERSISTENT_KERNEL(sum_float,  float,    dst[i] += src[i])
-PERSISTENT_KERNEL(sum_double, double,   dst[i] += src[i])
+PERSISTENT_KERNEL(sum_int8,   int8_t,   dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_uint8,  uint8_t,  dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_int16,  int16_t,  dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_uint16, uint16_t, dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_int32,  int32_t,  dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_uint32, uint32_t, dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_int64,  int64_t,  dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_uint64, uint64_t, dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_float,  float,    dst[i] = src1[i] + src2[i])
+PERSISTENT_KERNEL(sum_double, double,   dst[i] = src1[i] + src2[i])
 
 /* --- PROD --- */
-PERSISTENT_KERNEL(prod_int8,   int8_t,   dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_uint8,  uint8_t,  dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_int16,  int16_t,  dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_uint16, uint16_t, dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_int32,  int32_t,  dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_uint32, uint32_t, dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_int64,  int64_t,  dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_uint64, uint64_t, dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_float,  float,    dst[i] *= src[i])
-PERSISTENT_KERNEL(prod_double, double,   dst[i] *= src[i])
+PERSISTENT_KERNEL(prod_int8,   int8_t,   dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_uint8,  uint8_t,  dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_int16,  int16_t,  dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_uint16, uint16_t, dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_int32,  int32_t,  dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_uint32, uint32_t, dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_int64,  int64_t,  dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_uint64, uint64_t, dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_float,  float,    dst[i] = src1[i] * src2[i])
+PERSISTENT_KERNEL(prod_double, double,   dst[i] = src1[i] * src2[i])
 
 /* --- BAND (bitwise AND, integer types only) --- */
-PERSISTENT_KERNEL(band_int8,   int8_t,   dst[i] &= src[i])
-PERSISTENT_KERNEL(band_uint8,  uint8_t,  dst[i] &= src[i])
-PERSISTENT_KERNEL(band_int16,  int16_t,  dst[i] &= src[i])
-PERSISTENT_KERNEL(band_uint16, uint16_t, dst[i] &= src[i])
-PERSISTENT_KERNEL(band_int32,  int32_t,  dst[i] &= src[i])
-PERSISTENT_KERNEL(band_uint32, uint32_t, dst[i] &= src[i])
-PERSISTENT_KERNEL(band_int64,  int64_t,  dst[i] &= src[i])
-PERSISTENT_KERNEL(band_uint64, uint64_t, dst[i] &= src[i])
+PERSISTENT_KERNEL(band_int8,   int8_t,   dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_uint8,  uint8_t,  dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_int16,  int16_t,  dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_uint16, uint16_t, dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_int32,  int32_t,  dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_uint32, uint32_t, dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_int64,  int64_t,  dst[i] = src1[i] & src2[i])
+PERSISTENT_KERNEL(band_uint64, uint64_t, dst[i] = src1[i] & src2[i])
 
 /* --- BOR (bitwise OR) --- */
-PERSISTENT_KERNEL(bor_int8,   int8_t,   dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_uint8,  uint8_t,  dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_int16,  int16_t,  dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_uint16, uint16_t, dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_int32,  int32_t,  dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_uint32, uint32_t, dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_int64,  int64_t,  dst[i] |= src[i])
-PERSISTENT_KERNEL(bor_uint64, uint64_t, dst[i] |= src[i])
+PERSISTENT_KERNEL(bor_int8,   int8_t,   dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_uint8,  uint8_t,  dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_int16,  int16_t,  dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_uint16, uint16_t, dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_int32,  int32_t,  dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_uint32, uint32_t, dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_int64,  int64_t,  dst[i] = src1[i] | src2[i])
+PERSISTENT_KERNEL(bor_uint64, uint64_t, dst[i] = src1[i] | src2[i])
 
 /* --- BXOR (bitwise XOR) --- */
-PERSISTENT_KERNEL(bxor_int8,   int8_t,   dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_uint8,  uint8_t,  dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_int16,  int16_t,  dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_uint16, uint16_t, dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_int32,  int32_t,  dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_uint32, uint32_t, dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_int64,  int64_t,  dst[i] ^= src[i])
-PERSISTENT_KERNEL(bxor_uint64, uint64_t, dst[i] ^= src[i])
+PERSISTENT_KERNEL(bxor_int8,   int8_t,   dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_uint8,  uint8_t,  dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_int16,  int16_t,  dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_uint16, uint16_t, dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_int32,  int32_t,  dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_uint32, uint32_t, dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_int64,  int64_t,  dst[i] = src1[i] ^ src2[i])
+PERSISTENT_KERNEL(bxor_uint64, uint64_t, dst[i] = src1[i] ^ src2[i])
 
 /* =========================================================================
  * Host-side launcher wrappers — one per kernel, 1 block × 256 threads.

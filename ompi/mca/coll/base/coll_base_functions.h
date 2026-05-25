@@ -54,7 +54,7 @@
 #define COLL_BASE_REDUCE(session, op, src, dst, count, dtype)                  \
     do {                                                                        \
         if (NULL != (session))                                                  \
-            ompi_op_gpu_session_reduce((session), (src), (dst), (count));      \
+            ompi_op_gpu_session_reduce((session), (src), (dst), (dst), (count)); \
         else                                                                    \
             ompi_op_reduce((op), (src), (dst), (count), (dtype));              \
     } while (0)
@@ -222,7 +222,7 @@ int ompi_coll_base_allgather_intra_ring(ALLGATHER_ARGS);
 int ompi_coll_base_allgather_intra_neighborexchange(ALLGATHER_ARGS);
 int ompi_coll_base_allgather_intra_basic_linear(ALLGATHER_ARGS);
 int ompi_coll_base_allgather_intra_two_procs(ALLGATHER_ARGS);
-int ompi_coll_base_allgather_intra_k_bruck(ALLGATHER_ARGS, int radix);
+int ompi_coll_base_allgather_intra_k_bruck(ALLGATHER_ARGS, int radix, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_allgather_direct_messaging(ALLGATHER_ARGS);
 
 /* All GatherV */
@@ -323,7 +323,7 @@ int ompi_coll_base_scan_intra_linear(SCAN_ARGS);
 
 /* Scatter */
 int ompi_coll_base_scatter_intra_basic_linear(SCATTER_ARGS);
-int ompi_coll_base_scatter_intra_binomial(SCATTER_ARGS);
+int ompi_coll_base_scatter_intra_binomial(SCATTER_ARGS, mca_allocator_base_module_t *allocator);
 int ompi_coll_base_scatter_intra_linear_nb(SCATTER_ARGS, int max_reqs);
 
 /* ScatterV */
