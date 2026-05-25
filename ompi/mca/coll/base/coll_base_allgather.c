@@ -114,7 +114,7 @@ ompi_coll_base_allgather_intra_recursivedoubling(const void *sbuf, size_t scount
         int k = 2;
         return ompi_coll_base_allgather_intra_k_bruck(sbuf, scount, sdtype,
                                                       rbuf, rcount, rdtype,
-                                                      comm, module, k);
+                                                      comm, module, k, NULL);
     }
 
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output,

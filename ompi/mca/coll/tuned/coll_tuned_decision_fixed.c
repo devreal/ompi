@@ -416,7 +416,7 @@ ompi_coll_tuned_allreduce_intra_disjoint_dec_fixed(const void *sbuf, void *rbuf,
     }
 
     return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
-                                                    comm, module, alg, 0, 0);
+                                                    comm, module, alg, 0, 0, NULL);
 }
 
                            
