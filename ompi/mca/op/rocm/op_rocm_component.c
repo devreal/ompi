@@ -20,17 +20,12 @@
 #include "ompi/op/op_gpu_session.h"
 #include "ompi/mca/op/rocm/op_rocm.h"
 
-/* Forward declarations of session hooks (implemented in op_rocm_session.c) */
-ompi_op_gpu_session_t *ompi_op_rocm_session_begin(struct ompi_op_t *op,
-                                                   struct ompi_datatype_t *dtype,
-                                                   int dev_id);
-void ompi_op_rocm_session_reduce(ompi_op_gpu_session_t *session,
-                                  const void *src, void *dst, size_t count);
-void ompi_op_rocm_session_stop(ompi_op_gpu_session_t *session);
-bool ompi_op_rocm_session_restart(ompi_op_gpu_session_t *session,
-                                   struct ompi_op_t *op,
-                                   struct ompi_datatype_t *dtype);
-void ompi_op_rocm_session_free(ompi_op_gpu_session_t *session);
+/* Forward declarations of hooks implemented in op_rocm_session.c */
+ompi_op_gpu_cmd_queue_t *ompi_op_rocm_cmd_queue_alloc(int dev_id);
+void ompi_op_rocm_cmd_queue_free(ompi_op_gpu_cmd_queue_t *queue);
+ompi_op_gpu_session_t *ompi_op_rocm_session_begin(ompi_op_gpu_cmd_queue_t *queue,
+                                                   struct ompi_op_t *op,
+                                                   struct ompi_datatype_t *dtype);
 
 static int rocm_component_open(void);
 static int rocm_component_close(void);
@@ -60,11 +55,9 @@ ompi_op_base_component_1_0_0_t mca_op_rocm_component = {
     .opc_op_query   = rocm_component_op_query,
 
     /* GPU session hooks */
+    .opc_cmd_queue_alloc = ompi_op_rocm_cmd_queue_alloc,
+    .opc_cmd_queue_free  = ompi_op_rocm_cmd_queue_free,
     .opc_session_begin   = ompi_op_rocm_session_begin,
-    .opc_session_reduce  = ompi_op_rocm_session_reduce,
-    .opc_session_stop    = ompi_op_rocm_session_stop,
-    .opc_session_restart = ompi_op_rocm_session_restart,
-    .opc_session_free    = ompi_op_rocm_session_free,
 };
 MCA_BASE_COMPONENT_INIT(ompi, op, rocm)
 

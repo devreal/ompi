@@ -10,103 +10,131 @@
  */
 
 /*
- * Dispatcher and freelist pool for GPU reduction sessions.
+ * Dispatcher and cmd_queue pool for GPU reduction sessions.
  *
- * Sessions are expensive to create: each one allocates managed memory and
- * creates a private GPU stream.  Rather than destroy a session at the end
- * of every collective and recreate it at the start of the next, we keep a
- * flat pool of idle sessions keyed by dev_id.
+ * The expensive GPU resources — managed-memory command slot, shutdown flag,
+ * and private GPU stream — are bundled into an ompi_op_gpu_cmd_queue_t and
+ * pooled by dev_id.  Sessions themselves are lightweight structs (function
+ * pointers + a pointer to the cmd_queue) and are allocated fresh for each
+ * collective.
+ *
+ * Pool implementation:
+ *   cmd_queue_pool  — opal_lifo_t providing lock-free thread-safe push/pop.
+ *   cmd_queue_pool_count — atomic counter tracking current pool depth;
+ *                          used to enforce CMD_QUEUE_POOL_MAX without a mutex.
  *
  * Pool lifecycle:
- *   session_end()  — stops the persistent kernel (GPU stream and managed
- *                    memory remain allocated), then pushes the session onto
- *                    the freelist.
- *   session_begin() — if a matching dev_id entry is found, pops it and calls
- *                    restart_fn(session, op, dtype) to reconfigure and relaunch
- *                    the appropriate kernel; no cudaMalloc / hipMalloc overhead.
- *                    On pool miss, iterates op components to allocate fresh.
+ *   session_end()   — stops the persistent kernel (cmd_queue resources remain
+ *                     allocated), then pushes the cmd_queue into the lifo pool.
+ *   session_begin() — pops from the lifo looking for a matching dev_id entry
+ *                     and calls queue->session_begin_fn(queue, op, dtype) to
+ *                     configure and relaunch the kernel; no cudaMalloc overhead.
+ *                     On pool miss, iterates op components to allocate a fresh
+ *                     cmd_queue, then calls session_begin.
+ *                     On pool hit with no matching dev_id, the queue is pushed
+ *                     back and a fresh allocation is attempted.
+ *                     On pool hit with no kernel for (op, dtype), the queue is
+ *                     returned to the pool and NULL is returned.
  *
- * Pool layout:
- *   session_pool_head — singly-linked freelist, linked through session->pool_next
- *   session_pool_count — current freelist length (global cap = SESSION_POOL_MAX)
- *   session_pool_lock  — single mutex protecting all pool state
- *
- * SESSION_POOL_MAX caps the total number of idle sessions.  Sessions beyond
- * the cap are permanently destroyed rather than pooled to bound GPU resource
- * accumulation.
+ * CMD_QUEUE_POOL_MAX caps the total number of idle cmd_queues to bound GPU
+ * resource accumulation.
  */
 
 #include "ompi_config.h"
 
 #include <stdlib.h>
 
+#include "opal/class/opal_lifo.h"
 #include "opal/class/opal_list.h"
 #include "opal/mca/accelerator/base/base.h"
 #include "opal/mca/base/base.h"
-#include "opal/mca/threads/mutex.h"
+#include "opal/sys/atomic.h"
 #include "ompi/mca/op/op.h"
 #include "ompi/mca/op/base/base.h"
 #include "ompi/op/op_gpu_session.h"
 #include "ompi/op/op.h"
 
-/* Maximum number of idle sessions kept in the pool. */
-#define SESSION_POOL_MAX 8
+/* Maximum number of idle cmd_queues kept in the pool. */
+#define CMD_QUEUE_POOL_MAX 16
 
-static ompi_op_gpu_session_t *session_pool_head  = NULL;
-static int                    session_pool_count  = 0;
-static opal_mutex_t           session_pool_lock   = OPAL_MUTEX_STATIC_INIT;
+static opal_lifo_t          cmd_queue_pool;
+static opal_atomic_int32_t  cmd_queue_pool_count = 0;
 
 /* --------------------------------------------------------------------------
- * session_destroy — permanently shut down a session and free all resources.
- * Called when the pool is at capacity or at finalization.
+ * cmd_queue_destroy — permanently release a cmd_queue's GPU resources.
  * -------------------------------------------------------------------------- */
 static void
-session_destroy(ompi_op_gpu_session_t *session)
+cmd_queue_destroy(ompi_op_gpu_cmd_queue_t *queue)
 {
-    session->free_fn(session);   /* component frees stream, managed mem, priv */
-    free(session);
+    queue->free_fn(queue);   /* component frees stream, managed mem, priv */
+    OBJ_DESTRUCT(&queue->super);
+    free(queue);
+}
+
+/* --------------------------------------------------------------------------
+ * cmd_queue_pool_push — return a cmd_queue to the pool.
+ * Destroys the queue instead if the pool is already at capacity.
+ * -------------------------------------------------------------------------- */
+static void
+cmd_queue_pool_push(ompi_op_gpu_cmd_queue_t *queue)
+{
+    if (opal_atomic_add_fetch_32(&cmd_queue_pool_count, 1) <= CMD_QUEUE_POOL_MAX) {
+        opal_lifo_push(&cmd_queue_pool, &queue->super);
+    } else {
+        opal_atomic_add_fetch_32(&cmd_queue_pool_count, -1);
+        cmd_queue_destroy(queue);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * ompi_op_gpu_session_pool_init
+ * -------------------------------------------------------------------------- */
+void
+ompi_op_gpu_session_pool_init(void)
+{
+    OBJ_CONSTRUCT(&cmd_queue_pool, opal_lifo_t);
 }
 
 /* --------------------------------------------------------------------------
  * ompi_op_gpu_session_begin
  *
- * 1. Walk the pool freelist for a matching dev_id entry.
- * 2. On hit: pop the idle session, call restart_fn to reconfigure for the
- *    new (op, dtype) and relaunch the kernel.  If restart fails (no kernel
- *    for this combination), destroy the session and return NULL.
- * 3. On pool miss: iterate op components to create a new session; wire
- *    dispatch hooks before returning.
+ * 1. Pop one entry from the lifo pool.
+ * 2. If dev_id matches: call queue->session_begin_fn to configure and
+ *    relaunch the kernel.  On success return the session.  On failure
+ *    (no kernel for this op/dtype), push the queue back and return NULL.
+ * 3. If dev_id doesn't match: push the queue back and fall through to
+ *    fresh allocation.
+ * 4. Pool miss: iterate op components to allocate a fresh cmd_queue and
+ *    call opc_session_begin.
  * -------------------------------------------------------------------------- */
 ompi_op_gpu_session_t *
 ompi_op_gpu_session_begin(struct ompi_op_t *op,
                           struct ompi_datatype_t *dtype,
                           int dev_id)
 {
-    /* Check pool for a reusable idle session on this device. */
-    OPAL_THREAD_LOCK(&session_pool_lock);
-    ompi_op_gpu_session_t **pp = &session_pool_head;
-    while (NULL != *pp) {
-        if ((*pp)->dev_id == dev_id) {
-            /* Found a matching idle session — remove from freelist. */
-            ompi_op_gpu_session_t *s = *pp;
-            *pp = s->pool_next;
-            session_pool_count--;
-            OPAL_THREAD_UNLOCK(&session_pool_lock);
-            s->pool_next = NULL;
+    /* Check pool for a reusable cmd_queue. */
+    opal_list_item_t *item = opal_lifo_pop(&cmd_queue_pool);
+    if (NULL != item) {
+        opal_atomic_add_fetch_32(&cmd_queue_pool_count, -1);
+        ompi_op_gpu_cmd_queue_t *q = (ompi_op_gpu_cmd_queue_t *) item;
 
-            /* Reconfigure the session for the new (op, dtype). */
-            if (!s->restart_fn(s, op, dtype)) {
-                /* No GPU kernel for this combination; release and return NULL. */
-                session_destroy(s);
-                return NULL;
+        if (q->dev_id == dev_id) {
+            ompi_op_gpu_session_t *s = q->session_begin_fn(q, op, dtype);
+            if (NULL != s) {
+                return s;
             }
-            return s;
+            /* No GPU kernel for this (op, dtype).  Return the cmd_queue to
+             * the pool so it can be reused for a future combination that does
+             * have a kernel.  Caller falls back to ompi_op_reduce(). */
+            cmd_queue_pool_push(q);
+            return NULL;
         }
-        pp = &(*pp)->pool_next;
-    }
-    OPAL_THREAD_UNLOCK(&session_pool_lock);
 
-    /* Pool miss — create a fresh session via the first matching component. */
+        /* Wrong device — push back and fall through to fresh allocation. */
+        cmd_queue_pool_push(q);
+    }
+
+    /* Pool miss (or wrong device) — allocate a fresh cmd_queue. */
     mca_base_component_list_item_t *cli;
     OPAL_LIST_FOREACH(cli, &ompi_op_base_framework.framework_components,
                       mca_base_component_list_item_t) {
@@ -121,63 +149,32 @@ ompi_op_gpu_session_begin(struct ompi_op_t *op,
         const ompi_op_base_component_1_0_0_t *opc =
             (const ompi_op_base_component_1_0_0_t *) bc;
 
-        if (NULL == opc->opc_session_begin   ||
-            NULL == opc->opc_session_reduce  ||
-            NULL == opc->opc_session_stop    ||
-            NULL == opc->opc_session_restart ||
-            NULL == opc->opc_session_free) {
+        if (NULL == opc->opc_cmd_queue_alloc ||
+            NULL == opc->opc_cmd_queue_free  ||
+            NULL == opc->opc_session_begin) {
             continue;
         }
 
-        ompi_op_gpu_session_t *session = opc->opc_session_begin(op, dtype, dev_id);
+        ompi_op_gpu_cmd_queue_t *q = opc->opc_cmd_queue_alloc(dev_id);
+        if (NULL == q) {
+            continue;
+        }
+
+        /* Wire dispatch hooks into the cmd_queue. */
+        q->session_begin_fn = opc->opc_session_begin;
+        q->free_fn          = opc->opc_cmd_queue_free;
+
+        ompi_op_gpu_session_t *session = opc->opc_session_begin(q, op, dtype);
         if (NULL == session) {
+            /* This component has no kernel for (op, dtype); discard the queue. */
+            cmd_queue_destroy(q);
             continue;
         }
 
-        /* Wire dispatch hooks and pool bookkeeping. */
-        session->reduce_fn  = opc->opc_session_reduce;
-        session->stop_fn    = opc->opc_session_stop;
-        session->restart_fn = opc->opc_session_restart;
-        session->free_fn    = opc->opc_session_free;
-        session->pool_next  = NULL;
         return session;
     }
 
     return NULL;
-}
-
-/* --------------------------------------------------------------------------
- * ompi_op_gpu_session_begin_alloc
- *
- * Create a lightweight session with GPU scratch-memory allocation only.
- * No persistent kernel is launched; reduce_fn and the other kernel hooks are
- * NULL.  The session is freed directly by session_end (not pooled) because
- * it holds no GPU stream or managed memory of its own.
- * -------------------------------------------------------------------------- */
-ompi_op_gpu_session_t *
-ompi_op_gpu_session_begin_alloc(int dev_id)
-{
-    mca_allocator_base_module_t *allocator =
-        opal_accelerator_base_get_device_allocator(dev_id);
-    if (NULL == allocator) {
-        return NULL;
-    }
-
-    ompi_op_gpu_session_t *session =
-        (ompi_op_gpu_session_t *) malloc(sizeof(ompi_op_gpu_session_t));
-    if (NULL == session) {
-        return NULL;
-    }
-
-    session->dev_id     = dev_id;
-    session->allocator  = allocator;
-    session->backend    = NULL;
-    session->reduce_fn  = NULL;
-    session->stop_fn    = NULL;
-    session->restart_fn = NULL;
-    session->free_fn    = NULL;
-    session->pool_next  = NULL;
-    return session;
 }
 
 /* --------------------------------------------------------------------------
@@ -194,9 +191,7 @@ ompi_op_gpu_session_reduce(ompi_op_gpu_session_t *session,
 /* --------------------------------------------------------------------------
  * ompi_op_gpu_session_end
  *
- * Stop the persistent kernel and return the session to the pool so its GPU
- * stream and managed memory can be reused by the next collective on the same
- * device.  If the pool is already at SESSION_POOL_MAX, destroy immediately.
+ * Stop the persistent kernel and return the cmd_queue to the pool.
  * -------------------------------------------------------------------------- */
 void
 ompi_op_gpu_session_end(ompi_op_gpu_session_t *session)
@@ -205,49 +200,27 @@ ompi_op_gpu_session_end(ompi_op_gpu_session_t *session)
         return;
     }
 
-    /* Alloc-only sessions (stop_fn == NULL) hold no kernel resources.
-     * Free the struct immediately; they are not pooled. */
-    if (NULL == session->stop_fn) {
-        free(session);
-        return;
-    }
-
-    /* Signal the kernel to exit and wait for the stream to drain.
-     * GPU stream and managed memory remain allocated for reuse. */
+    /* Signal the kernel to exit and wait for the stream to drain. */
     session->stop_fn(session);
 
-    OPAL_THREAD_LOCK(&session_pool_lock);
-    if (session_pool_count < SESSION_POOL_MAX) {
-        session->pool_next = session_pool_head;
-        session_pool_head  = session;
-        session_pool_count++;
-        OPAL_THREAD_UNLOCK(&session_pool_lock);
-        return;
-    }
-    OPAL_THREAD_UNLOCK(&session_pool_lock);
+    ompi_op_gpu_cmd_queue_t *q = session->queue;
+    free(session);
 
-    /* Pool full — destroy immediately. */
-    session_destroy(session);
+    cmd_queue_pool_push(q);
 }
 
 /* --------------------------------------------------------------------------
  * ompi_op_gpu_session_pool_finalize
  *
- * Drain the pool, release all GPU resources, and free session structs.
+ * Drain the pool, release all GPU resources, and destroy the lifo.
  * Called once from ompi_op_base_close() during MPI_Finalize.
  * -------------------------------------------------------------------------- */
 void
 ompi_op_gpu_session_pool_finalize(void)
 {
-    OPAL_THREAD_LOCK(&session_pool_lock);
-    ompi_op_gpu_session_t *s = session_pool_head;
-    session_pool_head  = NULL;
-    session_pool_count = 0;
-    OPAL_THREAD_UNLOCK(&session_pool_lock);
-
-    while (NULL != s) {
-        ompi_op_gpu_session_t *next = s->pool_next;
-        session_destroy(s);
-        s = next;
+    opal_list_item_t *item;
+    while (NULL != (item = opal_lifo_pop(&cmd_queue_pool))) {
+        cmd_queue_destroy((ompi_op_gpu_cmd_queue_t *) item);
     }
+    OBJ_DESTRUCT(&cmd_queue_pool);
 }

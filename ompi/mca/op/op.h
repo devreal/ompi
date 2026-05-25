@@ -326,53 +326,37 @@ typedef struct ompi_op_base_module_1_0_0_t *
   (*ompi_op_base_component_op_query_1_0_0_fn_t)
     (struct ompi_op_t *op, int *priority);
 
-/* Forward declaration for GPU session (defined in ompi/op/op_gpu_session.h) */
+/* Forward declarations for GPU types (defined in ompi/op/op_gpu_session.h) */
+struct ompi_op_gpu_cmd_queue_t;
 struct ompi_op_gpu_session_t;
 
 /**
- * Optional component hook: create a GPU reduction session for the given
- * (op, dtype) on a specific device.  Returns NULL if this component does
- * not support the combination (caller tries the next component).
+ * Optional component hook: allocate the expensive GPU resources for a
+ * cmd_queue on the given device: managed-memory command slot, shutdown flag,
+ * and a private GPU stream.  Returns NULL on allocation failure.
+ * The caller (op_gpu_session.c) wires session_begin_fn and free_fn.
+ */
+typedef struct ompi_op_gpu_cmd_queue_t *
+  (*ompi_op_base_component_cmd_queue_alloc_fn_t)(int dev_id);
+
+/**
+ * Optional component hook: release the managed memory, GPU stream, and
+ * component-private state owned by the cmd_queue.
+ * Must NOT free the ompi_op_gpu_cmd_queue_t struct itself.
+ */
+typedef void
+  (*ompi_op_base_component_cmd_queue_free_fn_t)(struct ompi_op_gpu_cmd_queue_t *queue);
+
+/**
+ * Optional component hook: look up the GPU kernel for (op, dtype), reset the
+ * cmd_queue state, and launch the persistent kernel on the queue's stream.
+ * Returns a fully-wired ompi_op_gpu_session_t on success, NULL if no GPU
+ * kernel exists for this (op, dtype) combination.
  */
 typedef struct ompi_op_gpu_session_t *
-  (*ompi_op_base_component_session_begin_fn_t)(struct ompi_op_t *op,
-                                               struct ompi_datatype_t *dtype,
-                                               int dev_id);
-
-/**
- * Optional component hook: post one reduction to the persistent kernel and
- * block until done.
- */
-typedef void (*ompi_op_base_component_session_reduce_fn_t)(
-                  struct ompi_op_gpu_session_t *session,
-                  const void *src1, const void *src2, void *dst, size_t count);
-
-/**
- * Optional component hook: signal the persistent kernel to exit and
- * synchronize the stream.  The session struct and its managed memory remain
- * allocated so the session can be recycled by opc_session_restart.
- */
-typedef void (*ompi_op_base_component_session_stop_fn_t)(
-                  struct ompi_op_gpu_session_t *session);
-
-/**
- * Optional component hook: reconfigure an idle (stopped) session for a new
- * (op, dtype) combination and relaunch the appropriate persistent kernel.
- * Returns true on success; false if no GPU kernel exists for this combination
- * (caller should return the session to the pool and fall back to host path).
- */
-typedef bool (*ompi_op_base_component_session_restart_fn_t)(
-                  struct ompi_op_gpu_session_t *session,
-                  struct ompi_op_t *op,
-                  struct ompi_datatype_t *dtype);
-
-/**
- * Optional component hook: free managed memory, GPU stream, and backend
- * private state.  Called when a pooled session is permanently discarded.
- * Must NOT free the ompi_op_gpu_session_t struct itself.
- */
-typedef void (*ompi_op_base_component_session_free_fn_t)(
-                  struct ompi_op_gpu_session_t *session);
+  (*ompi_op_base_component_session_begin_fn_t)(struct ompi_op_gpu_cmd_queue_t *queue,
+                                               struct ompi_op_t *op,
+                                               struct ompi_datatype_t *dtype);
 
 /**
  * Op component interface.
@@ -392,12 +376,10 @@ typedef struct ompi_op_base_component_1_0_0_t {
     /** Query whether component is usable for given op */
     ompi_op_base_component_op_query_1_0_0_fn_t opc_op_query;
 
-    /** Optional: GPU session lifecycle hooks.  NULL in host-only components. */
-    ompi_op_base_component_session_begin_fn_t   opc_session_begin;
-    ompi_op_base_component_session_reduce_fn_t  opc_session_reduce;
-    ompi_op_base_component_session_stop_fn_t    opc_session_stop;
-    ompi_op_base_component_session_restart_fn_t opc_session_restart;
-    ompi_op_base_component_session_free_fn_t    opc_session_free;
+    /** Optional: GPU cmd_queue and session hooks.  NULL in host-only components. */
+    ompi_op_base_component_cmd_queue_alloc_fn_t  opc_cmd_queue_alloc;
+    ompi_op_base_component_cmd_queue_free_fn_t   opc_cmd_queue_free;
+    ompi_op_base_component_session_begin_fn_t    opc_session_begin;
 } ompi_op_base_component_1_0_0_t;
 
 

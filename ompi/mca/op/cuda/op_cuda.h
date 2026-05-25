@@ -21,14 +21,14 @@
 BEGIN_C_DECLS
 
 /**
- * Private per-session state owned by the cuda component.
- * Stored in ompi_op_gpu_session_t.backend.
+ * Component-private state stored in ompi_op_gpu_cmd_queue_t.priv.
+ * Holds the GPU stream and shutdown flag; the command slot lives in the
+ * public cmd field of ompi_op_gpu_cmd_queue_t.
  */
 typedef struct {
-    ompi_op_gpu_cmd_t   *cmd;       /* managed-memory command slot        */
-    volatile int32_t    *shutdown;  /* managed-memory shutdown flag        */
-    cudaStream_t         stream;    /* private CUDA stream for this session */
-} ompi_op_cuda_session_priv_t;
+    volatile int32_t *shutdown;  /* managed-memory shutdown flag */
+    cudaStream_t      stream;    /* private CUDA stream for this cmd_queue */
+} ompi_op_cuda_cmd_queue_priv_t;
 
 /**
  * Host-side launcher function type.

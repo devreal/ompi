@@ -15,6 +15,7 @@
 #include "ompi_config.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include "opal/class/opal_list.h"
 #include "opal/mca/allocator/allocator.h"
 
 BEGIN_C_DECLS
@@ -40,43 +41,57 @@ typedef struct {
 } ompi_op_gpu_cmd_t;
 
 /**
- * Per-collective GPU reduction session.  Created by ompi_op_gpu_session_begin()
- * before a collective algorithm's reduction loop starts, and returned to the
- * session pool by ompi_op_gpu_session_end() for reuse by a future collective.
+ * The expensive-to-create GPU resources needed by a persistent reduction
+ * kernel: a managed-memory command slot and a private GPU stream.  Pooled
+ * by dev_id so they can be reused across collectives without paying
+ * cudaMallocManaged/hipMallocManaged overhead on every call.
  *
- * Pool lifecycle: session_end() stops the persistent kernel (GPU resources
- * remain allocated) and pushes the session onto a freelist.  A future
- * session_begin() for the same dev_id pops the idle session and calls
- * restart_fn to reconfigure and relaunch the appropriate kernel — no
- * cudaMalloc/hipMalloc or stream creation overhead on the reuse path.
+ * cmd is public (the host communicates with the kernel through it directly).
+ * priv is component-private and holds the stream and shutdown flag.
+ *
+ * session_begin_fn and free_fn are managed by op_gpu_session.c
+ * and must not be set by callers.
+ */
+typedef struct ompi_op_gpu_cmd_queue_t {
+    opal_list_item_t             super;       /* MUST be first: used by opal_lifo_t pool */
+    int                          dev_id;
+    mca_allocator_base_module_t *allocator;  /* GPU scratch allocator for this device */
+    ompi_op_gpu_cmd_t           *cmd;        /* managed memory — shared with GPU */
+    void                        *priv;       /* component-private: stream, shutdown flag */
+    /* Session creation hook — wired at cmd_queue_alloc time by op_gpu_session.c. */
+    struct ompi_op_gpu_session_t *(*session_begin_fn)(
+        struct ompi_op_gpu_cmd_queue_t *queue,
+        struct ompi_op_t *op,
+        struct ompi_datatype_t *dtype);
+    /* Release managed memory, GPU stream, and priv.
+     * Must NOT free the ompi_op_gpu_cmd_queue_t struct itself. */
+    void (*free_fn)(struct ompi_op_gpu_cmd_queue_t *queue);
+} ompi_op_gpu_cmd_queue_t;
+
+/**
+ * Per-collective GPU reduction session.  Created by ompi_op_gpu_session_begin()
+ * before a collective algorithm's reduction loop, and destroyed (with its
+ * cmd_queue recycled to the pool) by ompi_op_gpu_session_end().
+ *
+ * Sessions are lightweight: all expensive GPU resources (managed memory,
+ * GPU stream) live in the cmd_queue, which is pooled separately.  The session
+ * holds only a pointer to the cmd_queue and the dispatch function pointers.
+ *
+ * The component's opc_session_begin wires queue, allocator, reduce_fn, and
+ * stop_fn.  Callers must not set these fields directly.
  *
  * When no GPU op component supports the (op, dtype) combination, begin()
  * returns NULL and all callers fall back to ompi_op_reduce().
- *
- * reduce_fn, stop_fn, restart_fn, free_fn, and pool_next are managed by
- * op_gpu_session.c — callers must not set them directly.
  */
 typedef struct ompi_op_gpu_session_t {
-    int                          dev_id;
-    mca_allocator_base_module_t *allocator;  /* GPU scratch allocator for this session */
-    void                        *backend;    /* opaque: cuda or rocm session state */
-    /* Dispatch hooks wired at session_begin time. */
+    ompi_op_gpu_cmd_queue_t     *queue;
+    mca_allocator_base_module_t *allocator;  /* GPU scratch allocator (= queue->allocator) */
+    /* Dispatch hooks wired by the component's opc_session_begin. */
     void (*reduce_fn)(struct ompi_op_gpu_session_t *session,
                       const void *src1, const void *src2, void *dst, size_t count);
     /* Signal the persistent kernel to exit and synchronize the stream.
-     * GPU stream and managed memory remain allocated for reuse. */
+     * The cmd_queue's resources remain valid for reuse after this call. */
     void (*stop_fn)(struct ompi_op_gpu_session_t *session);
-    /* Reconfigure an idle session for a new (op, dtype) and relaunch the
-     * persistent kernel.  Returns false if no GPU kernel exists for this
-     * combination (caller must then free the session and return NULL). */
-    bool (*restart_fn)(struct ompi_op_gpu_session_t *session,
-                       struct ompi_op_t *op,
-                       struct ompi_datatype_t *dtype);
-    /* Release managed memory, GPU stream, and backend private state.
-     * Must NOT free the ompi_op_gpu_session_t struct itself. */
-    void (*free_fn)(struct ompi_op_gpu_session_t *session);
-    /* Pool bookkeeping — do not access directly. */
-    struct ompi_op_gpu_session_t *pool_next;
 } ompi_op_gpu_session_t;
 
 /**
@@ -89,15 +104,6 @@ OMPI_DECLSPEC ompi_op_gpu_session_t *ompi_op_gpu_session_begin(struct ompi_op_t 
                                                                 int dev_id);
 
 /**
- * Create a lightweight session that provides GPU scratch-memory allocation only,
- * without launching a persistent reduction kernel.  Suitable for collective
- * algorithms that need temporary device memory but perform no GPU reduction.
- * Returns NULL if no device allocator is available for dev_id.
- * The returned session is freed by ompi_op_gpu_session_end().
- */
-OMPI_DECLSPEC ompi_op_gpu_session_t *ompi_op_gpu_session_begin_alloc(int dev_id);
-
-/**
  * Post one reduction command (src1 op src2 → dst) to the persistent kernel and
  * wait for completion.  src2 may alias dst for in-place operations.
  * Behavior is undefined if session is NULL.
@@ -107,15 +113,21 @@ OMPI_DECLSPEC void ompi_op_gpu_session_reduce(ompi_op_gpu_session_t *session,
                                                void *dst, size_t count);
 
 /**
- * Stop the persistent kernel and return the session to the pool for reuse.
- * GPU stream and managed memory remain allocated; a future begin() call for
- * the same dev_id will relaunch the kernel without allocating new resources.
- * NULL-safe.
+ * Stop the persistent kernel and return the session's cmd_queue to the pool
+ * for reuse.  GPU stream and managed memory remain allocated; a future begin()
+ * call for the same dev_id will relaunch the kernel without allocating new
+ * resources.  NULL-safe.
  */
 OMPI_DECLSPEC void ompi_op_gpu_session_end(ompi_op_gpu_session_t *session);
 
 /**
- * Drain and permanently destroy all pooled sessions.  Must be called once
+ * Initialize the cmd_queue pool.  Must be called once before any session
+ * operations (from ompi_op_base_open via the framework open hook).
+ */
+OMPI_DECLSPEC void ompi_op_gpu_session_pool_init(void);
+
+/**
+ * Drain and permanently destroy all pooled cmd_queues.  Must be called once
  * during MPI finalization (from ompi_op_base_close).
  */
 OMPI_DECLSPEC void ompi_op_gpu_session_pool_finalize(void);
