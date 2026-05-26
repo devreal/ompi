@@ -54,6 +54,8 @@
 #include "ompi/op/op_gpu_session.h"
 #include "ompi/op/op.h"
 
+OBJ_CLASS_INSTANCE(ompi_op_gpu_cmd_queue_t, opal_list_item_t, NULL, NULL);
+
 /* Maximum number of idle cmd_queues kept in the pool. */
 #define CMD_QUEUE_POOL_MAX 16
 
@@ -62,13 +64,13 @@ static opal_atomic_int32_t  cmd_queue_pool_count = 0;
 
 /* --------------------------------------------------------------------------
  * cmd_queue_destroy — permanently release a cmd_queue's GPU resources.
+ * OBJ_RELEASE dispatches through the concrete class destructor chain
+ * (e.g. ompi_op_cuda_cmd_queue_t) and frees the allocation.
  * -------------------------------------------------------------------------- */
 static void
 cmd_queue_destroy(ompi_op_gpu_cmd_queue_t *queue)
 {
-    queue->free_fn(queue);   /* component frees stream, managed mem, priv */
-    OBJ_DESTRUCT(&queue->super);
-    free(queue);
+    OBJ_RELEASE(queue);
 }
 
 /* --------------------------------------------------------------------------
@@ -150,7 +152,6 @@ ompi_op_gpu_session_begin(struct ompi_op_t *op,
             (const ompi_op_base_component_1_0_0_t *) bc;
 
         if (NULL == opc->opc_cmd_queue_alloc ||
-            NULL == opc->opc_cmd_queue_free  ||
             NULL == opc->opc_session_begin) {
             continue;
         }
@@ -160,9 +161,8 @@ ompi_op_gpu_session_begin(struct ompi_op_t *op,
             continue;
         }
 
-        /* Wire dispatch hooks into the cmd_queue. */
+        /* Wire session_begin_fn into the cmd_queue. */
         q->session_begin_fn = opc->opc_session_begin;
-        q->free_fn          = opc->opc_cmd_queue_free;
 
         ompi_op_gpu_session_t *session = opc->opc_session_begin(q, op, dtype);
         if (NULL == session) {

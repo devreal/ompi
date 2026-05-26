@@ -21,14 +21,17 @@
 BEGIN_C_DECLS
 
 /**
- * Component-private state stored in ompi_op_gpu_cmd_queue_t.priv.
- * Holds the GPU stream and shutdown flag; the command slot lives in the
- * public cmd field of ompi_op_gpu_cmd_queue_t.
+ * ROCm-specific cmd_queue.  Inherits ompi_op_gpu_cmd_queue_t by placing it
+ * as the first member named "super".  The HIP stream and shutdown flag are
+ * stored directly here rather than in a separate priv allocation.
+ * Allocated with OBJ_NEW; the OBJ destructor chain releases GPU resources.
  */
-typedef struct {
-    volatile int32_t *shutdown;  /* managed-memory shutdown flag */
-    hipStream_t       stream;    /* private HIP stream for this cmd_queue */
-} ompi_op_rocm_cmd_queue_priv_t;
+typedef struct ompi_op_rocm_cmd_queue_t {
+    ompi_op_gpu_cmd_queue_t  super;       /* MUST be first */
+    volatile int32_t        *shutdown;    /* managed-memory shutdown flag */
+    hipStream_t              stream;      /* private HIP stream */
+} ompi_op_rocm_cmd_queue_t;
+OBJ_CLASS_DECLARATION(ompi_op_rocm_cmd_queue_t);
 
 /**
  * Host-side launcher function type.

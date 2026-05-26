@@ -12,11 +12,10 @@
 /*
  * Session lifecycle for the CUDA persistent-kernel op component.
  *
- * cmd_queue_alloc: allocate managed-memory command slot + shutdown flag
- *                  and create a private CUDA stream.
- *
- * cmd_queue_free:  release the CUDA stream, managed memory, and
- *                  component-private state.
+ * ompi_op_cuda_cmd_queue_t inherits ompi_op_gpu_cmd_queue_t.  OBJ_NEW
+ * allocates the object; the OBJ destructor releases the CUDA stream and
+ * managed memory.  The component returns the base pointer from alloc so
+ * callers need no knowledge of the concrete type.
  *
  * session_begin:   look up the kernel for (op, dtype), reset the cmd_queue
  *                  state, and launch the persistent kernel on the existing
@@ -55,95 +54,89 @@ static void ompi_op_cuda_session_reduce(ompi_op_gpu_session_t *session,
 static void ompi_op_cuda_session_stop(ompi_op_gpu_session_t *session);
 
 /* --------------------------------------------------------------------------
+ * OBJ constructor / destructor for ompi_op_cuda_cmd_queue_t
+ * -------------------------------------------------------------------------- */
+static void
+ompi_op_cuda_cmd_queue_construct(ompi_op_cuda_cmd_queue_t *q)
+{
+    q->shutdown       = NULL;
+    q->stream         = NULL;
+    q->super.cmd      = NULL;
+    q->super.dev_id   = -1;
+    q->super.allocator = NULL;
+    q->super.session_begin_fn = NULL;
+}
+
+static void
+ompi_op_cuda_cmd_queue_destruct(ompi_op_cuda_cmd_queue_t *q)
+{
+    if (NULL != q->stream) {
+        cudaStreamDestroy(q->stream);
+        q->stream = NULL;
+    }
+    if (NULL != q->shutdown) {
+        cudaFree((void *) q->shutdown);
+        q->shutdown = NULL;
+    }
+    if (NULL != q->super.cmd) {
+        cudaFree(q->super.cmd);
+        q->super.cmd = NULL;
+    }
+}
+
+OBJ_CLASS_INSTANCE(ompi_op_cuda_cmd_queue_t,
+                   ompi_op_gpu_cmd_queue_t,
+                   ompi_op_cuda_cmd_queue_construct,
+                   ompi_op_cuda_cmd_queue_destruct);
+
+/* --------------------------------------------------------------------------
  * ompi_op_cuda_cmd_queue_alloc
  *
  * Allocate the expensive GPU resources for one device: a managed-memory
  * command slot, a managed-memory shutdown flag, and a private CUDA stream.
- * Returns NULL if any allocation fails.
+ * Returns the base pointer (ompi_op_gpu_cmd_queue_t *); NULL on failure.
  * -------------------------------------------------------------------------- */
 ompi_op_gpu_cmd_queue_t *
 ompi_op_cuda_cmd_queue_alloc(int dev_id)
 {
-    ompi_op_gpu_cmd_queue_t *queue =
-        (ompi_op_gpu_cmd_queue_t *) malloc(sizeof(ompi_op_gpu_cmd_queue_t));
-    if (NULL == queue) {
-        return NULL;
-    }
-    OBJ_CONSTRUCT(&queue->super, opal_list_item_t);
-
-    ompi_op_cuda_cmd_queue_priv_t *priv =
-        (ompi_op_cuda_cmd_queue_priv_t *) malloc(sizeof(ompi_op_cuda_cmd_queue_priv_t));
-    if (NULL == priv) {
-        free(queue);
+    ompi_op_cuda_cmd_queue_t *q = OBJ_NEW(ompi_op_cuda_cmd_queue_t);
+    if (NULL == q) {
         return NULL;
     }
 
     cudaError_t err;
 
-    /* Allocate managed-memory command slot (accessible by both CPU and GPU) */
-    err = cudaMallocManaged((void **) &queue->cmd,
+    err = cudaMallocManaged((void **) &q->super.cmd,
                             sizeof(ompi_op_gpu_cmd_t),
                             cudaMemAttachGlobal);
     if (cudaSuccess != err) {
-        free(priv);
-        free(queue);
+        OBJ_RELEASE(q);
         return NULL;
     }
-    queue->cmd->src1   = NULL;
-    queue->cmd->src2   = NULL;
-    queue->cmd->dst    = NULL;
-    queue->cmd->count  = 0;
-    queue->cmd->status = 0;
+    q->super.cmd->src1   = NULL;
+    q->super.cmd->src2   = NULL;
+    q->super.cmd->dst    = NULL;
+    q->super.cmd->count  = 0;
+    q->super.cmd->status = 0;
 
-    /* Allocate managed-memory shutdown flag */
-    err = cudaMallocManaged((void **) &priv->shutdown,
+    err = cudaMallocManaged((void **) &q->shutdown,
                             sizeof(int32_t),
                             cudaMemAttachGlobal);
     if (cudaSuccess != err) {
-        cudaFree(queue->cmd);
-        free(priv);
-        free(queue);
+        OBJ_RELEASE(q);
         return NULL;
     }
-    *priv->shutdown = 0;
+    *q->shutdown = 0;
 
-    /* Create a dedicated non-blocking stream for this cmd_queue */
-    err = cudaStreamCreateWithFlags(&priv->stream, cudaStreamNonBlocking);
+    err = cudaStreamCreateWithFlags(&q->stream, cudaStreamNonBlocking);
     if (cudaSuccess != err) {
-        cudaFree(priv->shutdown);
-        cudaFree(queue->cmd);
-        free(priv);
-        free(queue);
+        OBJ_RELEASE(q);
         return NULL;
     }
 
-    queue->dev_id    = dev_id;
-    queue->allocator = opal_accelerator_base_get_device_allocator(dev_id);
-    queue->priv      = priv;
-    return queue;
-}
-
-/* --------------------------------------------------------------------------
- * ompi_op_cuda_cmd_queue_free
- *
- * Release the CUDA stream, managed memory, and component-private state.
- * Does NOT free the ompi_op_gpu_cmd_queue_t struct itself.
- * -------------------------------------------------------------------------- */
-void
-ompi_op_cuda_cmd_queue_free(ompi_op_gpu_cmd_queue_t *queue)
-{
-    ompi_op_cuda_cmd_queue_priv_t *priv =
-        (ompi_op_cuda_cmd_queue_priv_t *) queue->priv;
-    if (NULL == priv) {
-        return;
-    }
-
-    cudaStreamDestroy(priv->stream);
-    cudaFree((void *) priv->shutdown);
-    cudaFree(queue->cmd);
-    free(priv);
-    queue->priv = NULL;
-    queue->cmd  = NULL;
+    q->super.dev_id    = dev_id;
+    q->super.allocator = opal_accelerator_base_get_device_allocator(dev_id);
+    return &q->super;
 }
 
 /* --------------------------------------------------------------------------
@@ -173,19 +166,18 @@ ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
         return NULL;
     }
 
-    ompi_op_cuda_cmd_queue_priv_t *priv =
-        (ompi_op_cuda_cmd_queue_priv_t *) queue->priv;
+    ompi_op_cuda_cmd_queue_t *cq = (ompi_op_cuda_cmd_queue_t *) queue;
 
     /* Reset queue state for the new kernel */
-    *priv->shutdown    = 0;
-    queue->cmd->src1   = NULL;
-    queue->cmd->src2   = NULL;
-    queue->cmd->dst    = NULL;
-    queue->cmd->count  = 0;
-    queue->cmd->status = 0;
+    *cq->shutdown        = 0;
+    queue->cmd->src1     = NULL;
+    queue->cmd->src2     = NULL;
+    queue->cmd->dst      = NULL;
+    queue->cmd->count    = 0;
+    queue->cmd->status   = 0;
 
     /* Launch the persistent kernel (1 block, 256 threads) */
-    launcher(queue->cmd, priv->shutdown, priv->stream);
+    launcher(queue->cmd, cq->shutdown, cq->stream);
     cudaError_t err = cudaGetLastError();
     if (cudaSuccess != err) {
         return NULL;
@@ -241,13 +233,12 @@ ompi_op_cuda_session_reduce(ompi_op_gpu_session_t *session,
 static void
 ompi_op_cuda_session_stop(ompi_op_gpu_session_t *session)
 {
-    ompi_op_cuda_cmd_queue_priv_t *priv =
-        (ompi_op_cuda_cmd_queue_priv_t *) session->queue->priv;
+    ompi_op_cuda_cmd_queue_t *cq = (ompi_op_cuda_cmd_queue_t *) session->queue;
 
     /* Signal the kernel to exit its loop */
-    *priv->shutdown = 1;
+    *cq->shutdown = 1;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 
     /* Wait for the kernel to finish; stream remains valid after this */
-    cudaStreamSynchronize(priv->stream);
+    cudaStreamSynchronize(cq->stream);
 }

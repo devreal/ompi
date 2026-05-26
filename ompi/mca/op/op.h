@@ -340,14 +340,6 @@ typedef struct ompi_op_gpu_cmd_queue_t *
   (*ompi_op_base_component_cmd_queue_alloc_fn_t)(int dev_id);
 
 /**
- * Optional component hook: release the managed memory, GPU stream, and
- * component-private state owned by the cmd_queue.
- * Must NOT free the ompi_op_gpu_cmd_queue_t struct itself.
- */
-typedef void
-  (*ompi_op_base_component_cmd_queue_free_fn_t)(struct ompi_op_gpu_cmd_queue_t *queue);
-
-/**
  * Optional component hook: look up the GPU kernel for (op, dtype), reset the
  * cmd_queue state, and launch the persistent kernel on the queue's stream.
  * Returns a fully-wired ompi_op_gpu_session_t on success, NULL if no GPU
@@ -378,7 +370,6 @@ typedef struct ompi_op_base_component_1_0_0_t {
 
     /** Optional: GPU cmd_queue and session hooks.  NULL in host-only components. */
     ompi_op_base_component_cmd_queue_alloc_fn_t  opc_cmd_queue_alloc;
-    ompi_op_base_component_cmd_queue_free_fn_t   opc_cmd_queue_free;
     ompi_op_base_component_session_begin_fn_t    opc_session_begin;
 } ompi_op_base_component_1_0_0_t;
 

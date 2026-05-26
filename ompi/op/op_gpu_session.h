@@ -46,27 +46,25 @@ typedef struct {
  * by dev_id so they can be reused across collectives without paying
  * cudaMallocManaged/hipMallocManaged overhead on every call.
  *
- * cmd is public (the host communicates with the kernel through it directly).
- * priv is component-private and holds the stream and shutdown flag.
+ * GPU components (cuda, rocm) inherit from this base by placing it as the
+ * first member named "super" in their own cmd_queue struct, then allocate
+ * with OBJ_NEW and return the base pointer.  Destruction (including GPU
+ * resource cleanup) is dispatched automatically through the OBJ class chain.
  *
- * session_begin_fn and free_fn are managed by op_gpu_session.c
- * and must not be set by callers.
+ * session_begin_fn is wired at cmd_queue_alloc time by the component.
  */
 typedef struct ompi_op_gpu_cmd_queue_t {
     opal_list_item_t             super;       /* MUST be first: used by opal_lifo_t pool */
     int                          dev_id;
     mca_allocator_base_module_t *allocator;  /* GPU scratch allocator for this device */
     ompi_op_gpu_cmd_t           *cmd;        /* managed memory — shared with GPU */
-    void                        *priv;       /* component-private: stream, shutdown flag */
-    /* Session creation hook — wired at cmd_queue_alloc time by op_gpu_session.c. */
+    /* Session creation hook — wired at cmd_queue_alloc time by the component. */
     struct ompi_op_gpu_session_t *(*session_begin_fn)(
         struct ompi_op_gpu_cmd_queue_t *queue,
         struct ompi_op_t *op,
         struct ompi_datatype_t *dtype);
-    /* Release managed memory, GPU stream, and priv.
-     * Must NOT free the ompi_op_gpu_cmd_queue_t struct itself. */
-    void (*free_fn)(struct ompi_op_gpu_cmd_queue_t *queue);
 } ompi_op_gpu_cmd_queue_t;
+OBJ_CLASS_DECLARATION(ompi_op_gpu_cmd_queue_t);
 
 /**
  * Per-collective GPU reduction session.  Created by ompi_op_gpu_session_begin()
