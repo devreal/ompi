@@ -186,7 +186,7 @@ of type-component pairs.  For example, --enable-mca-no-build=pml-ob1])
     else
        msg=
        if test -z "$enable_mca_dso"; then
-           enable_mca_dso="accelerator-cuda,accelerator-rocm,accelerator-ze"
+           enable_mca_dso="accelerator-cuda,accelerator-rocm,accelerator-ze,op-cuda,op-rocm"
            msg="(default)"
        fi
        DSO_all=0
