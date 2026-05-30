@@ -28,7 +28,11 @@ NVCC_INCLUDES = \
     -I$(top_srcdir) \
     -I$(top_builddir) \
     -I$(top_srcdir)/ompi \
-    -I$(top_builddir)/ompi
+    -I$(top_builddir)/ompi \
+    -I$(top_builddir)/opal \
+    -I$(top_builddir)/opal/include \
+    -I$(top_srcdir)/ompi/include \
+    -I$(top_srcdir)/opal/include
 
 op_cuda_kernels.o: $(srcdir)/op_cuda_kernels.cu \
                    $(srcdir)/op_cuda.h
