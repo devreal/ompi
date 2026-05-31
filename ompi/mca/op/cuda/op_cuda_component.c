@@ -20,11 +20,6 @@
 #include "ompi/op/op_gpu_session.h"
 #include "ompi/mca/op/cuda/op_cuda.h"
 
-/* Forward declarations of hooks implemented in op_cuda_session.c */
-ompi_op_gpu_cmd_queue_t *ompi_op_cuda_cmd_queue_alloc(int dev_id);
-ompi_op_gpu_session_t *ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
-                                                   struct ompi_op_t *op,
-                                                   struct ompi_datatype_t *dtype);
 
 static int cuda_component_open(void);
 static int cuda_component_close(void);
@@ -66,6 +61,7 @@ MCA_BASE_COMPONENT_INIT(ompi, op, cuda)
 static int
 cuda_component_open(void)
 {
+    ompi_op_cuda_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 

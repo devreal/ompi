@@ -52,6 +52,15 @@ typedef void (*ompi_op_rocm_launcher_fn_t)(ompi_op_gpu_cmd_t *cmd,
 OMPI_DECLSPEC extern ompi_op_rocm_launcher_fn_t
 ompi_op_rocm_kernel_fns[OMPI_OP_BASE_FORTRAN_OP_MAX][OMPI_OP_BASE_TYPE_MAX];
 
+/* Defined in op_rocm_kernels.cpp (extern "C") */
+void ompi_op_rocm_kernel_fns_init(void);
+
+/* Defined in op_rocm_session.c */
+ompi_op_gpu_cmd_queue_t *ompi_op_rocm_cmd_queue_alloc(int dev_id);
+ompi_op_gpu_session_t *ompi_op_rocm_session_begin(ompi_op_gpu_cmd_queue_t *queue,
+                                                   struct ompi_op_t *op,
+                                                   struct ompi_datatype_t *dtype);
+
 END_C_DECLS
 
 #endif /* OMPI_MCA_OP_ROCM_H */
