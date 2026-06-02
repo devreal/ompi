@@ -11,12 +11,18 @@ sources = \
     coll_sched.h \
     coll_sched_alloc.c \
     coll_sched_build_allreduce.c \
+    coll_sched_build_alltoall.c \
     coll_sched_build_bcast.c \
     coll_sched_build_reduce.c \
     coll_sched_component.c \
     coll_sched_do_allreduce.c \
+    coll_sched_do_alltoall.c \
     coll_sched_do_bcast.c \
     coll_sched_do_reduce.c \
+    coll_sched_do_iallreduce.c \
+    coll_sched_do_ibcast.c \
+    coll_sched_do_ireduce.c \
+    coll_sched_exec_cb.c \
     coll_sched_exec_pml.c \
     coll_sched_module.c
 

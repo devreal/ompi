@@ -194,3 +194,19 @@ ompi_coll_sched_select_exec(mca_coll_sched_module_t *m,
     }
     return NULL;
 }
+
+ompi_coll_sched_exec_t *
+ompi_coll_sched_select_iexec(mca_coll_sched_module_t *m,
+                              const ompi_coll_sched_t *sched,
+                              struct ompi_communicator_t **comms,
+                              struct ompi_datatype_t *dtype,
+                              struct ompi_op_t *op)
+{
+    for (int i = 0; i < m->num_executors; i++) {
+        ompi_coll_sched_exec_t *e = m->executors[i];
+        if (e && e->iexecute && e->can_execute(e, sched, comms, dtype, op)) {
+            return e;
+        }
+    }
+    return NULL;
+}

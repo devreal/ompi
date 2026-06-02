@@ -145,8 +145,12 @@ void ompi_coll_sched_op_copy  (ompi_coll_sched_t *s, int step, int op_idx,
 
 ompi_coll_sched_t *ompi_coll_sched_build_allreduce_ring(int rank, int n);
 ompi_coll_sched_t *ompi_coll_sched_build_allreduce_recursivedoubling(int rank, int n);
+ompi_coll_sched_t *ompi_coll_sched_build_allreduce_nonoverlapping(int rank, int n);
 ompi_coll_sched_t *ompi_coll_sched_build_reduce_binomial(int rank, int n, int root);
 ompi_coll_sched_t *ompi_coll_sched_build_bcast_binomial(int rank, int n, int root);
+ompi_coll_sched_t *ompi_coll_sched_build_bcast_chain(int rank, int n, int root);
+ompi_coll_sched_t *ompi_coll_sched_build_alltoall_linear(int rank, int n);
+ompi_coll_sched_t *ompi_coll_sched_build_alltoall_pairwise(int rank, int n);
 
 /* ── Executor interface ─────────────────────────────────────────────────── */
 
@@ -169,15 +173,31 @@ typedef int (*ompi_coll_sched_exec_run_fn_t)(
     struct ompi_op_t              *op,
     int                            base_tag);
 
+/* Non-blocking variant: starts the operation and returns a request.
+ * Resources are freed when the user's request is released (req_free).
+ * NULL if the executor does not support non-blocking execution. */
+typedef int (*ompi_coll_sched_exec_irun_fn_t)(
+    struct ompi_coll_sched_exec_t *exec,
+    const ompi_coll_sched_t       *sched,
+    struct ompi_communicator_t   **comms,
+    const void *sbuf, void *rbuf,
+    size_t count,
+    struct ompi_datatype_t        *dtype,
+    struct ompi_op_t              *op,
+    int                            base_tag,
+    ompi_request_t               **request);
+
 typedef void (*ompi_coll_sched_exec_free_fn_t)(struct ompi_coll_sched_exec_t *exec);
 
 typedef struct ompi_coll_sched_exec_t {
     ompi_coll_sched_exec_can_fn_t  can_execute;
-    ompi_coll_sched_exec_run_fn_t  execute;
+    ompi_coll_sched_exec_run_fn_t  execute;    /* blocking */
+    ompi_coll_sched_exec_irun_fn_t iexecute;   /* non-blocking; NULL if unsupported */
     ompi_coll_sched_exec_free_fn_t free;
 } ompi_coll_sched_exec_t;
 
 ompi_coll_sched_exec_t *ompi_coll_sched_exec_pml_create(void);
+ompi_coll_sched_exec_t *ompi_coll_sched_exec_cb_create(void);
 
 /* ── Schedule cache ─────────────────────────────────────────────────────── */
 
@@ -232,6 +252,14 @@ ompi_coll_sched_exec_t *ompi_coll_sched_select_exec(
     struct ompi_datatype_t    *dtype,
     struct ompi_op_t          *op);
 
+/* Like select_exec but only returns executors that implement iexecute. */
+ompi_coll_sched_exec_t *ompi_coll_sched_select_iexec(
+    mca_coll_sched_module_t  *m,
+    const ompi_coll_sched_t  *sched,
+    struct ompi_communicator_t **comms,
+    struct ompi_datatype_t    *dtype,
+    struct ompi_op_t          *op);
+
 /* ── Component globals ──────────────────────────────────────────────────── */
 
 OMPI_DECLSPEC extern const mca_coll_base_component_3_0_0_t mca_coll_sched_component;
@@ -241,10 +269,17 @@ int mca_coll_sched_init_query(bool enable_progress_threads, bool enable_mpi_thre
 mca_coll_base_module_t *mca_coll_sched_comm_query(struct ompi_communicator_t *comm,
                                                     int *priority);
 
-/* Per-collective dispatch functions */
+/* Per-collective dispatch functions (blocking) */
 int mca_coll_sched_allreduce_intra(ALLREDUCE_ARGS);
 int mca_coll_sched_reduce_intra(REDUCE_ARGS);
 int mca_coll_sched_bcast_intra(BCAST_ARGS);
+int mca_coll_sched_alltoall_intra(ALLTOALL_ARGS);
+
+/* Per-collective dispatch functions (non-blocking) */
+int mca_coll_sched_iallreduce_intra(IALLREDUCE_ARGS);
+int mca_coll_sched_ireduce_intra(IREDUCE_ARGS);
+int mca_coll_sched_ibcast_intra(IBCAST_ARGS);
+int mca_coll_sched_ialltoall_intra(IALLTOALL_ARGS);
 
 END_C_DECLS
 

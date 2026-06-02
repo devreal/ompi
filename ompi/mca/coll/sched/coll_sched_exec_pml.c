@@ -259,6 +259,7 @@ ompi_coll_sched_exec_pml_create(void)
     }
     e->base.can_execute = pml_can_execute;
     e->base.execute     = pml_execute;
+    e->base.iexecute    = NULL;
     e->base.free        = pml_free;
     return &e->base;
 }

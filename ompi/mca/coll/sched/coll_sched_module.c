@@ -47,9 +47,14 @@ mca_coll_sched_comm_query(struct ompi_communicator_t *comm, int *priority)
     m->super.coll_module_enable  = mca_coll_sched_module_enable;
     m->super.coll_module_disable = mca_coll_sched_module_disable;
 
-    m->super.coll_allreduce = mca_coll_sched_allreduce_intra;
-    m->super.coll_reduce    = mca_coll_sched_reduce_intra;
-    m->super.coll_bcast     = mca_coll_sched_bcast_intra;
+    m->super.coll_allreduce  = mca_coll_sched_allreduce_intra;
+    m->super.coll_reduce     = mca_coll_sched_reduce_intra;
+    m->super.coll_bcast      = mca_coll_sched_bcast_intra;
+    m->super.coll_alltoall   = mca_coll_sched_alltoall_intra;
+    m->super.coll_iallreduce = mca_coll_sched_iallreduce_intra;
+    m->super.coll_ireduce    = mca_coll_sched_ireduce_intra;
+    m->super.coll_ibcast     = mca_coll_sched_ibcast_intra;
+    m->super.coll_ialltoall  = mca_coll_sched_ialltoall_intra;
 
     return &m->super;
 }
@@ -83,16 +88,25 @@ mca_coll_sched_module_enable(mca_coll_base_module_t *module,
 {
     mca_coll_sched_module_t *m = (mca_coll_sched_module_t *) module;
 
-    SCHED_INSTALL(comm, m, allreduce, mca_coll_sched_allreduce_intra);
-    SCHED_INSTALL(comm, m, reduce,    mca_coll_sched_reduce_intra);
-    SCHED_INSTALL(comm, m, bcast,     mca_coll_sched_bcast_intra);
+    SCHED_INSTALL(comm, m, allreduce,  mca_coll_sched_allreduce_intra);
+    SCHED_INSTALL(comm, m, reduce,     mca_coll_sched_reduce_intra);
+    SCHED_INSTALL(comm, m, bcast,      mca_coll_sched_bcast_intra);
+    SCHED_INSTALL(comm, m, alltoall,   mca_coll_sched_alltoall_intra);
+    SCHED_INSTALL(comm, m, iallreduce, mca_coll_sched_iallreduce_intra);
+    SCHED_INSTALL(comm, m, ireduce,    mca_coll_sched_ireduce_intra);
+    SCHED_INSTALL(comm, m, ibcast,     mca_coll_sched_ibcast_intra);
+    SCHED_INSTALL(comm, m, ialltoall,  mca_coll_sched_ialltoall_intra);
 
-    /* Create PML executor as the default backend */
-    m->executors[0] = ompi_coll_sched_exec_pml_create();
-    if (NULL == m->executors[0]) {
+    /* CB (callback/continuation) executor: lower per-step latency than BSP PML.
+     * Registered first so it takes priority; falls back to PML if unavailable. */
+    m->executors[0] = ompi_coll_sched_exec_cb_create();
+    m->executors[1] = ompi_coll_sched_exec_pml_create();
+    if (NULL == m->executors[0] || NULL == m->executors[1]) {
+        if (m->executors[0]) { m->executors[0]->free(m->executors[0]); }
+        if (m->executors[1]) { m->executors[1]->free(m->executors[1]); }
         return OMPI_ERR_OUT_OF_RESOURCE;
     }
-    m->num_executors = 1;
+    m->num_executors = 2;
 
     return OMPI_SUCCESS;
 }
@@ -106,6 +120,11 @@ mca_coll_sched_module_disable(mca_coll_base_module_t *module,
     SCHED_UNINSTALL(comm, m, allreduce);
     SCHED_UNINSTALL(comm, m, reduce);
     SCHED_UNINSTALL(comm, m, bcast);
+    SCHED_UNINSTALL(comm, m, alltoall);
+    SCHED_UNINSTALL(comm, m, iallreduce);
+    SCHED_UNINSTALL(comm, m, ireduce);
+    SCHED_UNINSTALL(comm, m, ibcast);
+    SCHED_UNINSTALL(comm, m, ialltoall);
 
     /* Free cached schedules */
     for (int i = 0; i < m->cache_count; i++) {
