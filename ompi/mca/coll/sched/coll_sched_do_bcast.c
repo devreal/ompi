@@ -14,6 +14,7 @@
 #include "ompi/mca/coll/base/coll_tags.h"
 
 #define BCAST_VARIANT_BINOMIAL 0
+#define BCAST_VARIANT_CHAIN    1
 
 int
 mca_coll_sched_bcast_intra(void *buffer, size_t count,
@@ -26,17 +27,24 @@ mca_coll_sched_bcast_intra(void *buffer, size_t count,
     int rank = ompi_comm_rank(comm);
     int n    = ompi_comm_size(comm);
 
+    /* Binomial is O(log n) steps; chain is O(n) steps without segmentation.
+     * Use chain only for n==2 where both have exactly 1 step and chain avoids
+     * the binomial tree overhead. For all other sizes use binomial. */
+    int variant = (n == 2) ? BCAST_VARIANT_CHAIN : BCAST_VARIANT_BINOMIAL;
+
     /* ── Get or build schedule ──────────────────────────────────────────── */
 
     ompi_coll_sched_t *sched =
-        ompi_coll_sched_cache_get(m, BCAST, BCAST_VARIANT_BINOMIAL, root, 0);
+        ompi_coll_sched_cache_get(m, BCAST, variant, root, 0);
     if (NULL == sched) {
-        sched = ompi_coll_sched_build_bcast_binomial(rank, n, root);
+        sched = (variant == BCAST_VARIANT_CHAIN)
+                ? ompi_coll_sched_build_bcast_chain(rank, n, root)
+                : ompi_coll_sched_build_bcast_binomial(rank, n, root);
         if (NULL == sched) {
             return m->c_coll.coll_bcast(buffer, count, dtype, root,
                                          comm, m->c_coll.coll_bcast_module);
         }
-        ompi_coll_sched_cache_put(m, BCAST, BCAST_VARIANT_BINOMIAL, root, 0, sched);
+        ompi_coll_sched_cache_put(m, BCAST, variant, root, 0, sched);
     }
 
     /* ── Select executor ────────────────────────────────────────────────── */
@@ -48,8 +56,6 @@ mca_coll_sched_bcast_intra(void *buffer, size_t count,
                                      comm, m->c_coll.coll_bcast_module);
     }
 
-    /* Bcast: buffer is both sbuf (at root) and rbuf.
-     * Pass buffer for both so the schedule's RECV refs write into it. */
     return exec->execute(exec, sched, comms,
                          buffer, buffer, count, dtype, NULL,
                          MCA_COLL_BASE_TAG_BCAST);

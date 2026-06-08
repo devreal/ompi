@@ -130,3 +130,77 @@ ompi_coll_sched_build_bcast_binomial(int rank, int n, int root)
 
     return sched;
 }
+
+/*
+ * Chain (pipeline) broadcast – matches ompi_coll_base_bcast_intra_pipeline
+ * without segmentation.
+ *
+ * Virtual position in the chain:
+ *   chain_pos  = (rank - root + n) % n
+ *   predecessor = (rank - 1 + n) % n  [real rank; only valid if chain_pos > 0]
+ *   successor   = (rank + 1) % n      [real rank; only valid if chain_pos < n-1]
+ *
+ * Schedule:
+ *   n=1: 0 steps.
+ *   root (chain_pos==0): 1 send step (barrier=false) to successor, BUF_RECV.
+ *   last (chain_pos==n-1): 1 recv step (barrier=true) from predecessor, BUF_RECV.
+ *   intermediate: recv step (barrier=true) from predecessor, then send step
+ *                 (barrier=false) to successor; both use BUF_RECV.
+ *
+ * No temp buffers.  num_comm_slots=1.
+ * The dispatch passes buffer as both sbuf and rbuf (same as bcast_binomial).
+ */
+ompi_coll_sched_t *
+ompi_coll_sched_build_bcast_chain(int rank, int n, int root)
+{
+    if (n == 1) {
+        ompi_coll_sched_t *sched = ompi_coll_sched_alloc(0);
+        if (sched) {
+            sched->num_comm_slots = 1;
+        }
+        return sched;
+    }
+
+    int chain_pos   = (rank - root + n) % n;
+    int is_root     = (chain_pos == 0);
+    int is_last     = (chain_pos == n - 1);
+
+    /* Count steps: recv step (non-root) + send step (non-last) */
+    int num_steps = (!is_root ? 1 : 0) + (!is_last ? 1 : 0);
+
+    ompi_coll_sched_t *sched = ompi_coll_sched_alloc(num_steps);
+    if (NULL == sched) {
+        return NULL;
+    }
+    sched->num_comm_slots = 1;
+
+    int step = 0;
+
+    /* Receive step: non-root ranks wait for data from predecessor */
+    if (!is_root) {
+        int pred_real = (rank - 1 + n) % n;
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 1, true)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        ompi_coll_sched_op_recv(sched, step, 0, 0, pred_real,
+                                 ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        step++;
+    }
+
+    /* Send step: non-last ranks forward to successor */
+    if (!is_last) {
+        int succ_real = (rank + 1) % n;
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 1, false)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        ompi_coll_sched_op_send(sched, step, 0, 0, succ_real,
+                                 ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        step++;
+    }
+
+    return sched;
+}

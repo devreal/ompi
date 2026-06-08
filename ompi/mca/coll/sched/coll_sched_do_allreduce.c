@@ -18,18 +18,18 @@
 #include "opal/datatype/opal_datatype.h"
 
 /* Algorithm variant IDs (used as cache keys) */
-#define ALLREDUCE_VARIANT_RING   0
-#define ALLREDUCE_VARIANT_RDBL   1
+#define ALLREDUCE_VARIANT_RING          0
+#define ALLREDUCE_VARIANT_RDBL          1
+#define ALLREDUCE_VARIANT_NONOVERLAP    2
 
 /*
  * Select allreduce algorithm, retrieve or build schedule, execute.
  *
- * The dispatch:
- *  1. Handles MPI_IN_PLACE.
- *  2. Copies sbuf → rbuf so the schedule works in-place on rbuf.
- *  3. Looks up / builds a cached schedule.
- *  4. Picks the best available executor.
- *  5. Falls back to the saved lower-priority function if needed.
+ * Selection:
+ *   power-of-2 n → recursive doubling: O(log n) steps, latency-optimal.
+ *   other n      → nonoverlapping (binomial reduce + bcast): O(2 log n) steps,
+ *                  correct for all ops including non-commutative, better than
+ *                  ring's O(2n) step count for larger n.
  */
 int
 mca_coll_sched_allreduce_intra(const void *sbuf, void *rbuf,
@@ -45,25 +45,24 @@ mca_coll_sched_allreduce_intra(const void *sbuf, void *rbuf,
 
     /* ── Algorithm selection ────────────────────────────────────────────── */
 
-    /* Prefer recursive doubling for power-of-two comms (better latency).
-     * Fall back to ring for all other cases (bandwidth-friendly). */
     int variant;
     if ((n & (n - 1)) == 0) {
         variant = ALLREDUCE_VARIANT_RDBL;
     } else {
-        variant = ALLREDUCE_VARIANT_RING;
+        variant = ALLREDUCE_VARIANT_NONOVERLAP;
     }
 
     /* ── Get or build schedule ──────────────────────────────────────────── */
 
     ompi_coll_sched_t *sched = ompi_coll_sched_cache_get(m, ALLREDUCE, variant, -1, 0);
     if (NULL == sched) {
-        sched = (variant == ALLREDUCE_VARIANT_RDBL)
-                ? ompi_coll_sched_build_allreduce_recursivedoubling(rank, n)
-                : ompi_coll_sched_build_allreduce_ring(rank, n);
+        if (variant == ALLREDUCE_VARIANT_RDBL) {
+            sched = ompi_coll_sched_build_allreduce_recursivedoubling(rank, n);
+        } else {
+            sched = ompi_coll_sched_build_allreduce_nonoverlapping(rank, n);
+        }
 
         if (NULL == sched) {
-            /* Fall back to lower-priority component */
             return m->c_coll.coll_allreduce(sbuf, rbuf, count, dtype, op, comm,
                                              m->c_coll.coll_allreduce_module);
         }

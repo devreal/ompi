@@ -159,3 +159,170 @@ ompi_coll_sched_build_allreduce_recursivedoubling(int rank, int n)
 
     return sched;
 }
+
+/*
+ * Non-overlapping allreduce: binomial reduce to rank 0, then binomial bcast
+ * from rank 0.  Matches ompi_coll_base_allreduce_intra_nonoverlapping.
+ *
+ * The virtual root is always rank 0, so vrank == rank throughout.
+ *
+ * Phase 1 – Reduce to rank 0 (same logic as build_reduce_binomial with root=0):
+ *   For mask = 1, 2, 4, … < n:
+ *     if (rank & mask): send to parent (rank - mask), stop.
+ *     else if (rank + mask < n): recv from child (rank + mask) into TEMP(0),
+ *                                reduce into BUF_RECV.
+ *   First recv step uses REDUCE3(TEMP(0), BUF_SEND → BUF_RECV).
+ *   Subsequent recv steps use REDUCE2(TEMP(0) → BUF_RECV).
+ *   Leaf ranks (no recvs) send from BUF_SEND; internal non-root send from BUF_RECV.
+ *
+ * Phase 2 – Bcast from rank 0 (same logic as build_bcast_binomial with root=0):
+ *   recv_mask = highest power-of-two ≤ rank (0 for root).
+ *   send_start = (rank == 0) ? 1 : (recv_mask << 1).
+ *   Non-root: one recv step from parent (rank ^ recv_mask).
+ *   For each child mask = send_start, 2*send_start, …: one send step, BUF_RECV.
+ *
+ * Temp buffer TEMP(0) full-size: only allocated if rank has any reduce recv steps.
+ */
+ompi_coll_sched_t *
+ompi_coll_sched_build_allreduce_nonoverlapping(int rank, int n)
+{
+    if (n == 1) {
+        ompi_coll_sched_t *sched = ompi_coll_sched_alloc(0);
+        if (sched) {
+            sched->num_comm_slots = 1;
+        }
+        return sched;
+    }
+
+    /* ── Phase 1: Reduce to rank 0 ─────────────────────────────────────── */
+
+    int reduce_recv = 0;   /* number of recv steps in reduce phase */
+    int reduce_send = 0;   /* 1 if rank sends in reduce, 0 otherwise */
+
+    for (int mask = 1; mask < n; mask <<= 1) {
+        if (rank & mask) {
+            reduce_send = 1;
+            break;
+        }
+        if (rank + mask < n) {
+            reduce_recv++;
+        }
+    }
+
+    /* ── Phase 2: Bcast from rank 0 ────────────────────────────────────── */
+
+    int bcast_recv_mask = 0;
+    if (rank > 0) {
+        bcast_recv_mask = 1;
+        while ((bcast_recv_mask << 1) <= rank) {
+            bcast_recv_mask <<= 1;
+        }
+    }
+    int bcast_send_start = (rank == 0) ? 1 : (bcast_recv_mask << 1);
+
+    int bcast_recv = (rank != 0) ? 1 : 0;
+    int bcast_send = 0;
+    for (int mask = bcast_send_start; rank + mask < n; mask <<= 1) {
+        bcast_send++;
+        if (mask <= 0 || mask >= n) break; /* guard overflow */
+    }
+
+    /* Total steps */
+    int num_steps = reduce_recv + reduce_send + bcast_recv + bcast_send;
+
+    ompi_coll_sched_t *sched = ompi_coll_sched_alloc(num_steps);
+    if (NULL == sched) {
+        return NULL;
+    }
+    sched->num_comm_slots = 1;
+
+    /* Temp buf 0: full-size, needed only if rank receives during reduce */
+    if (reduce_recv > 0) {
+        if (OMPI_ERR_OUT_OF_RESOURCE == ompi_coll_sched_add_temp_buf(sched, true)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+    }
+
+    int step = 0;
+
+    /* ── Reduce recv steps ──────────────────────────────────────────────── */
+    for (int mask = 1; mask < n && step < reduce_recv; mask <<= 1) {
+        if (rank & mask) {
+            break; /* this rank sends at this mask; no more recvs */
+        }
+        if (rank + mask >= n) {
+            continue; /* no child at this level */
+        }
+
+        int child_real = rank + mask; /* vrank == rank since root=0 */
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 2, false)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        ompi_coll_sched_op_recv(sched, step, 0, 0, child_real,
+                                 ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_TEMP(0)));
+        if (step == 0) {
+            ompi_coll_sched_op_reduce3(sched, step, 1,
+                                        ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_TEMP(0)),
+                                        ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_SEND),
+                                        ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        } else {
+            ompi_coll_sched_op_reduce(sched, step, 1,
+                                       ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_TEMP(0)),
+                                       ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        }
+        step++;
+    }
+
+    /* ── Reduce send step ───────────────────────────────────────────────── */
+    if (reduce_send) {
+        /* Find the send mask: lowest set bit of rank */
+        int send_mask = 1;
+        while (!(rank & send_mask)) {
+            send_mask <<= 1;
+        }
+        int parent_real = rank - send_mask; /* vrank == rank since root=0 */
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 1, false)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        int send_buf_id = (reduce_recv == 0) ? OMPI_COLL_SCHED_BUF_SEND
+                                             : OMPI_COLL_SCHED_BUF_RECV;
+        ompi_coll_sched_op_send(sched, step, 0, 0, parent_real,
+                                 ompi_coll_sched_bufref_whole(send_buf_id));
+        step++;
+    }
+
+    /* ── Bcast recv step ────────────────────────────────────────────────── */
+    if (bcast_recv) {
+        int parent_real = rank ^ bcast_recv_mask; /* = rank - bcast_recv_mask */
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 1, true)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        ompi_coll_sched_op_recv(sched, step, 0, 0, parent_real,
+                                 ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        step++;
+    }
+
+    /* ── Bcast send steps ───────────────────────────────────────────────── */
+    for (int mask = bcast_send_start; rank + mask < n; mask <<= 1) {
+        int child_real = rank + mask; /* = rank ^ mask since rank & mask == 0 */
+
+        if (OMPI_SUCCESS != ompi_coll_sched_step_init(sched, step, 1, false)) {
+            ompi_coll_sched_free(sched);
+            return NULL;
+        }
+        ompi_coll_sched_op_send(sched, step, 0, 0, child_real,
+                                 ompi_coll_sched_bufref_whole(OMPI_COLL_SCHED_BUF_RECV));
+        step++;
+
+        if (mask <= 0 || mask >= n) break; /* guard overflow */
+    }
+
+    return sched;
+}
