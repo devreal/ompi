@@ -61,7 +61,6 @@ MCA_BASE_COMPONENT_INIT(ompi, op, cuda)
 static int
 cuda_component_open(void)
 {
-    ompi_op_cuda_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 
@@ -84,6 +83,8 @@ cuda_component_init_query(bool enable_progress_threads,
     if (cudaSuccess != err || device_count <= 0) {
         return OMPI_ERR_NOT_SUPPORTED;
     }
+    // register launchers here, component_open seems to be never called
+    ompi_op_cuda_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 

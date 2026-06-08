@@ -176,7 +176,7 @@ ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
     queue->cmd->count    = 0;
     queue->cmd->status   = 0;
 
-    /* Launch the persistent kernel (1 block, 256 threads) */
+    /* Launch the persistent kernel */
     launcher(queue->cmd, cq->shutdown, cq->stream);
     cudaError_t err = cudaGetLastError();
     if (cudaSuccess != err) {
