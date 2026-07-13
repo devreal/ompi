@@ -105,7 +105,7 @@ AC_DEFUN([MCA_ompi_op_cuda_CONFIG],[
            op_cuda_LIBS="-lcudart"
            # __nanosleep requires SM 7.0 (Volta) or later.
            AS_IF([test "x$NVCCFLAGS" = "x"],
-                 [NVCCFLAGS="-arch=sm_70"])
+                 [NVCCFLAGS="-arch=native"])
           ])
 
         CPPFLAGS="$op_cuda_save_CPPFLAGS"
