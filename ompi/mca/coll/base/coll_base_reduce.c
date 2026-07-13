@@ -645,7 +645,8 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
                                          struct ompi_op_t *op,
                                          int root,
                                          struct ompi_communicator_t *comm,
-                                         mca_coll_base_module_t *module)
+                                         mca_coll_base_module_t *module,
+                                         ompi_op_gpu_session_t *session)
 {
     int i, rank, err, size;
     ptrdiff_t extent, dsize, gap = 0;
@@ -673,7 +674,7 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
 
     if (MPI_IN_PLACE == sbuf) {
         sbuf = rbuf;
-        inplace_temp_free = (char*)malloc(dsize);
+        inplace_temp_free = (char*)COLL_SESSION_ALLOC(session, dsize);
         if (NULL == inplace_temp_free) {
             return OMPI_ERR_OUT_OF_RESOURCE;
         }
@@ -681,10 +682,10 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
     }
 
     if (size > 1) {
-        free_buffer = (char*)malloc(dsize);
+        free_buffer = (char*)COLL_SESSION_ALLOC(session, dsize);
         if (NULL == free_buffer) {
             if (NULL != inplace_temp_free) {
-                free(inplace_temp_free);
+                COLL_SESSION_FREE(session, inplace_temp_free);
             }
             return OMPI_ERR_OUT_OF_RESOURCE;
         }
@@ -702,10 +703,10 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
     }
     if (MPI_SUCCESS != err) {
         if (NULL != free_buffer) {
-            free(free_buffer);
+            COLL_SESSION_FREE(session, free_buffer);
         }
         if (NULL != inplace_temp_free) {
-            free(inplace_temp_free);
+            COLL_SESSION_FREE(session, inplace_temp_free);
         }
         return err;
     }
@@ -721,10 +722,10 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
                                     MPI_STATUS_IGNORE));
             if (MPI_SUCCESS != err) {
                 if (NULL != free_buffer) {
-                    free(free_buffer);
+                    COLL_SESSION_FREE(session, free_buffer);
                 }
                 if (NULL != inplace_temp_free) {
-                    free(inplace_temp_free);
+                    COLL_SESSION_FREE(session, inplace_temp_free);
                 }
                 return err;
             }
@@ -734,15 +735,15 @@ ompi_coll_base_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t co
 
         /* Perform the reduction */
 
-        ompi_op_reduce(op, inbuf, rbuf, count, dtype);
+        COLL_BASE_REDUCE(session, op, inbuf, rbuf, count, dtype);
     }
 
     if (NULL != inplace_temp_free) {
         err = ompi_datatype_copy_content_same_ddt(dtype, count, (char*)sbuf, rbuf);
-        free(inplace_temp_free);
+        COLL_SESSION_FREE(session, inplace_temp_free);
     }
     if (NULL != free_buffer) {
-        free(free_buffer);
+        COLL_SESSION_FREE(session, free_buffer);
     }
 
     /* All done */
@@ -834,7 +835,7 @@ int ompi_coll_base_reduce_intra_redscat_gather(
                      "coll:base:reduce_intra_redscat_gather: rank %d/%d count %zu"
                      "switching to basic linear reduce", rank, comm_size, count));
         return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype,
-                                                        op, root, comm, module);
+                                                        op, root, comm, module, session);
     }
 
     int err = MPI_SUCCESS;

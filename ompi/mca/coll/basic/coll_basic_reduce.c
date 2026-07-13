@@ -109,7 +109,7 @@ mca_coll_basic_reduce_log_intra(const void *sbuf, void *rbuf, size_t count,
 
     if (!ompi_op_is_commute(op)) {
         return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype,
-                                                        op, root, comm, module);
+                                                        op, root, comm, module, NULL);
     }
 
     /* Some variables */

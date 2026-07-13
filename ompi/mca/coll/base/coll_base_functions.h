@@ -234,11 +234,11 @@ int ompi_coll_base_allgatherv_intra_basic_default(ALLGATHERV_ARGS);
 int ompi_coll_base_allgatherv_intra_two_procs(ALLGATHERV_ARGS);
 
 /* All Reduce */
-int ompi_coll_base_allreduce_intra_nonoverlapping(ALLREDUCE_ARGS);
+int ompi_coll_base_allreduce_intra_nonoverlapping(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_recursivedoubling(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_ring(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_ring_segmented(ALLREDUCE_ARGS, uint32_t segsize, ompi_op_gpu_session_t *session);
-int ompi_coll_base_allreduce_intra_basic_linear(ALLREDUCE_ARGS);
+int ompi_coll_base_allreduce_intra_basic_linear(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_redscat_allgather(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_allreduce_intra_allgather_reduce(ALLREDUCE_ARGS, ompi_op_gpu_session_t *session);
 
@@ -285,7 +285,7 @@ int ompi_coll_base_bcast_intra_scatter_allgather_ring(BCAST_ARGS, uint32_t segsi
 
 /* Exscan */
 int ompi_coll_base_exscan_intra_recursivedoubling(EXSCAN_ARGS, ompi_op_gpu_session_t *session);
-int ompi_coll_base_exscan_intra_linear(EXSCAN_ARGS);
+int ompi_coll_base_exscan_intra_linear(EXSCAN_ARGS, ompi_op_gpu_session_t *session);
 
 /* Gather */
 int ompi_coll_base_gather_intra_basic_linear(GATHER_ARGS);
@@ -296,7 +296,7 @@ int ompi_coll_base_gather_intra_linear_sync(GATHER_ARGS, int first_segment_size)
 
 /* Reduce */
 int ompi_coll_base_reduce_generic(REDUCE_ARGS, ompi_coll_tree_t* tree, size_t count_by_segment, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
-int ompi_coll_base_reduce_intra_basic_linear(REDUCE_ARGS);
+int ompi_coll_base_reduce_intra_basic_linear(REDUCE_ARGS, ompi_op_gpu_session_t *session);
 int ompi_coll_base_reduce_intra_chain(REDUCE_ARGS, uint32_t segsize, int fanout, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
 int ompi_coll_base_reduce_intra_pipeline(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
 int ompi_coll_base_reduce_intra_binary(REDUCE_ARGS, uint32_t segsize, int max_outstanding_reqs, ompi_op_gpu_session_t *session);
@@ -319,7 +319,7 @@ int ompi_coll_base_reduce_scatter_block_intra_butterfly(REDUCESCATTERBLOCK_ARGS,
 
 /* Scan */
 int ompi_coll_base_scan_intra_recursivedoubling(SCAN_ARGS, ompi_op_gpu_session_t *session);
-int ompi_coll_base_scan_intra_linear(SCAN_ARGS);
+int ompi_coll_base_scan_intra_linear(SCAN_ARGS, ompi_op_gpu_session_t *session);
 
 /* Scatter */
 int ompi_coll_base_scatter_intra_basic_linear(SCATTER_ARGS);

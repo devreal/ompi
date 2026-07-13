@@ -355,7 +355,7 @@ int mca_coll_acoll_reduce_intra(const void *sbuf, void *rbuf, size_t count,
     size = ompi_comm_size(comm);
     if (size < 4)
         return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype, op, root, comm,
-                                                        module);
+                                                        module, NULL);
 
     /* Falling back to inorder binary for non-commutative operators to be safe */
     if (!ompi_op_is_commute(op)) {
@@ -419,7 +419,7 @@ int mca_coll_acoll_reduce_intra(const void *sbuf, void *rbuf, size_t count,
                                               subc);
             } else if (1 == alg) {
                 return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype, op, root,
-                                                                comm, module);
+                                                                comm, module, NULL);
             } else if (2 == alg) {
                 return ompi_coll_base_reduce_intra_binomial(sbuf, rbuf, count, dtype, op, root,
                                                             comm, module, 0, 0, NULL);

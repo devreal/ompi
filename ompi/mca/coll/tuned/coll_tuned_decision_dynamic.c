@@ -869,7 +869,7 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
     } /*end if any com rules to check */
 
     return ompi_coll_base_exscan_intra_linear(sbuf, rbuf, count, dtype,
-                                              op, comm, module);
+                                              op, comm, module, NULL);
 }
 
 int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t count,
@@ -931,5 +931,5 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
     } /*end if any com rules to check */
 
     return ompi_coll_base_scan_intra_linear(sbuf, rbuf, count, dtype,
-                                            op, comm, module);
+                                            op, comm, module, NULL);
 }

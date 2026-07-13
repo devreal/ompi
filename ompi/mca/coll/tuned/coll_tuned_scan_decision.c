@@ -102,7 +102,7 @@ int ompi_coll_tuned_scan_intra_do_this(const void *sbuf, void* rbuf, size_t coun
     switch (algorithm) {
     case (0):
     case (1):  return ompi_coll_base_scan_intra_linear(sbuf, rbuf, count, dtype,
-                                                       op, comm, module);
+                                                       op, comm, module, session);
     case (2):  return ompi_coll_base_scan_intra_recursivedoubling(sbuf, rbuf, count, dtype,
                                                                   op, comm, module, session);
     } /* switch */

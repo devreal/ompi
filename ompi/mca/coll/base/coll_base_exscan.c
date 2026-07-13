@@ -37,7 +37,8 @@ ompi_coll_base_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
                                   struct ompi_datatype_t *dtype,
                                   struct ompi_op_t *op,
                                   struct ompi_communicator_t *comm,
-                                  mca_coll_base_module_t *module)
+                                  mca_coll_base_module_t *module,
+                                  ompi_op_gpu_session_t *session)
 {
     int size, rank, err;
     ptrdiff_t dsize, gap;
@@ -76,7 +77,7 @@ ompi_coll_base_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
      * for malloc'ing this size is provided in coll_basic_reduce.c. */
     dsize = opal_datatype_span(&dtype->super, count, &gap);
 
-    free_buffer = (char*)malloc(dsize);
+    free_buffer = (char*)COLL_SESSION_ALLOC(session, dsize);
     if (NULL == free_buffer) {
         return OMPI_ERR_OUT_OF_RESOURCE;
     }
@@ -93,7 +94,7 @@ ompi_coll_base_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
 
     /* Now reduce the prior rank's result with my source buffer.  The source
      * buffer had been previously copied into the temporary reduce_buffer. */
-    ompi_op_reduce(op, rbuf, reduce_buffer, count, dtype);
+    COLL_BASE_REDUCE(session, op, rbuf, reduce_buffer, count, dtype);
 
     /* Send my result off to the next rank */
     err = MCA_PML_CALL(send(reduce_buffer, count, dtype, rank + 1,
@@ -101,7 +102,7 @@ ompi_coll_base_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
                             MCA_PML_BASE_SEND_STANDARD, comm));
     /* Error */
   error:
-    free(free_buffer);
+    COLL_SESSION_FREE(session, free_buffer);
 
     /* All done */
     return err;

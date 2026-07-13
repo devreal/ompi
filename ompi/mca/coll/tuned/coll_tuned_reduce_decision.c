@@ -165,7 +165,8 @@ int ompi_coll_tuned_reduce_intra_do_this(const void *sbuf, void* rbuf, size_t co
     case (0):  return ompi_coll_tuned_reduce_intra_dec_fixed(sbuf, rbuf, count, dtype,
                                                              op, root, comm, module);
     case (1):  return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype,
-                                                               op, root, comm, module);
+                                                               op, root, comm, module,
+                                                               session);
     case (2):  return ompi_coll_base_reduce_intra_chain(sbuf, rbuf, count, dtype,
                                                         op, root, comm, module,
                                                         segsize, faninout, max_requests,

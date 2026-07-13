@@ -141,9 +141,9 @@ int ompi_coll_tuned_allreduce_intra_do_this(const void *sbuf, void *rbuf, size_t
     case (0):
         return ompi_coll_tuned_allreduce_intra_dec_fixed(sbuf, rbuf, count, dtype, op, comm, module);
     case (1):
-        return ompi_coll_base_allreduce_intra_basic_linear(sbuf, rbuf, count, dtype, op, comm, module);
+        return ompi_coll_base_allreduce_intra_basic_linear(sbuf, rbuf, count, dtype, op, comm, module, session);
     case (2):
-        return ompi_coll_base_allreduce_intra_nonoverlapping(sbuf, rbuf, count, dtype, op, comm, module);
+        return ompi_coll_base_allreduce_intra_nonoverlapping(sbuf, rbuf, count, dtype, op, comm, module, session);
     case (3):
         return ompi_coll_base_allreduce_intra_recursivedoubling(sbuf, rbuf, count, dtype, op, comm, module, session);
     case (4):

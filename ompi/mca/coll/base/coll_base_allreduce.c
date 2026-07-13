@@ -60,9 +60,15 @@ ompi_coll_base_allreduce_intra_nonoverlapping(const void *sbuf, void *rbuf, size
                                                struct ompi_datatype_t *dtype,
                                                struct ompi_op_t *op,
                                                struct ompi_communicator_t *comm,
-                                               mca_coll_base_module_t *module)
+                                               mca_coll_base_module_t *module,
+                                               ompi_op_gpu_session_t *session)
 {
     int err, rank;
+
+    /* This composes MPI_Reduce+MPI_Bcast through the module vtable, which
+     * does not carry a GPU session; the session is accepted here only for
+     * signature consistency with the other allreduce algorithms. */
+    (void) session;
 
     rank = ompi_comm_rank(comm);
 
@@ -891,7 +897,8 @@ ompi_coll_base_allreduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t
                                              struct ompi_datatype_t *dtype,
                                              struct ompi_op_t *op,
                                              struct ompi_communicator_t *comm,
-                                             mca_coll_base_module_t *module)
+                                             mca_coll_base_module_t *module,
+                                             ompi_op_gpu_session_t *session)
 {
     int err, rank;
 
@@ -904,14 +911,14 @@ ompi_coll_base_allreduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t
     if (MPI_IN_PLACE == sbuf) {
         if (0 == rank) {
             err = ompi_coll_base_reduce_intra_basic_linear (MPI_IN_PLACE, rbuf, count, dtype,
-                                                             op, 0, comm, module);
+                                                             op, 0, comm, module, session);
         } else {
             err = ompi_coll_base_reduce_intra_basic_linear(rbuf, NULL, count, dtype,
-                                                            op, 0, comm, module);
+                                                            op, 0, comm, module, session);
         }
     } else {
         err = ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype,
-                                                        op, 0, comm, module);
+                                                        op, 0, comm, module, session);
     }
     if (MPI_SUCCESS != err) {
         return err;
@@ -995,7 +1002,7 @@ int ompi_coll_base_allreduce_intra_redscat_allgather(
                      "count %zu switching to basic linear allreduce",
                      rank, comm_size, count));
         return ompi_coll_base_allreduce_intra_basic_linear(sbuf, rbuf, count, dtype,
-                                                           op, comm, module);
+                                                           op, comm, module, session);
     }
 
     /* Find nearest power-of-two less than or equal to comm_size */
