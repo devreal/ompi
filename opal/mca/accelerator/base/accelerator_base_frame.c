@@ -19,7 +19,6 @@
 #include "opal/mca/base/base.h"
 #include "opal/mca/mca.h"
 #include "opal/mca/allocator/allocator.h"
-#include "opal/mca/allocator/basic/allocator_basic.h"
 #include "opal/mca/threads/mutex.h"
 
 /*
@@ -39,61 +38,142 @@ static int opal_accel_num_devices = 0;
 static opal_mutex_t opal_accel_alloc_lock = OPAL_MUTEX_STATIC_INIT;
 
 /*
- * Tracks a single GPU segment returned by opal_accelerator.mem_alloc so it
- * can be released on cleanup.  The basic allocator never calls seg_free during
- * normal operation (only compact/finalize would, and compact is a no-op), so
- * we keep our own list instead of relying on it.
+ * Device buffers handed out by this allocator may be read/written directly
+ * by a persistent GPU kernel (see ompi_op_gpu_session_t) as well as by the
+ * host, so they are backed by whatever opal_accelerator.mem_alloc() returns
+ * for the device (e.g. plain cuMemAlloc/hipMalloc memory, which the host
+ * CPU cannot dereference). That rules out the generic "basic" allocator:
+ * it pools/coalesces free blocks by writing a size header directly into the
+ * bytes it hands out, which segfaults the moment that memory is device-only.
+ *
+ * Collective scratch buffers are typically requested at a handful of
+ * distinct sizes, repeatedly, over the lifetime of a run (e.g. the same
+ * MPI_Reduce count called in a loop) — device mem_alloc/mem_release round
+ * trips on every call are a real latency hit. So this module caches freed
+ * blocks for reuse instead of releasing them back to the device immediately.
+ * All bookkeeping (which blocks are free, and the size of an outstanding
+ * allocation) lives in host-side opal_list_t's keyed by pointer — never in
+ * the device buffer itself, which is the bug the "basic" allocator hit.
+ * Free blocks are only released back to the device at alc_finalize().
  */
-struct opal_accel_alloc_seg_t {
+typedef struct {
     opal_list_item_t super;
     void *ptr;
-};
-typedef struct opal_accel_alloc_seg_t opal_accel_alloc_seg_t;
-OBJ_CLASS_INSTANCE(opal_accel_alloc_seg_t, opal_list_item_t, NULL, NULL);
+    size_t size;
+} opal_accel_device_seg_t;
+OBJ_CLASS_INSTANCE(opal_accel_device_seg_t, opal_list_item_t, NULL, NULL);
 
 typedef struct {
+    mca_allocator_base_module_t super;
     int dev_id;
-    opal_list_t segs; /* every GPU segment allocated via seg_alloc */
-} opal_accel_alloc_ctx_t;
+    opal_mutex_t lock;
+    opal_list_t free_segs;        /* cached blocks available for reuse */
+    opal_list_t outstanding_segs; /* blocks currently handed out to callers */
+} opal_accel_device_allocator_t;
 
-/*
- * seg_alloc is called (under the basic allocator's internal lock) whenever the
- * free list has no block large enough.  Record each new GPU segment so it can
- * be released on cleanup.
- */
-static void *opal_accel_seg_alloc(void *ctx, size_t *size)
+static void *opal_accel_device_alloc(mca_allocator_base_module_t *base, size_t size, size_t align)
 {
-    opal_accel_alloc_ctx_t *ac = (opal_accel_alloc_ctx_t *) ctx;
-    opal_accel_alloc_seg_t *seg;
-    void *ptr = NULL;
+    opal_accel_device_allocator_t *m = (opal_accel_device_allocator_t *) base;
+    opal_accel_device_seg_t *seg, *best = NULL;
+    void *ptr;
 
-    if (OPAL_SUCCESS != opal_accelerator.mem_alloc(ac->dev_id, &ptr, *size)) {
-        return NULL;
+    OPAL_THREAD_LOCK(&m->lock);
+
+    /* Best-fit scan of the free list: the smallest cached block that is
+     * still large enough, so we don't habitually hand out a much bigger
+     * block than requested. The free list is expected to stay small (a
+     * handful of distinct scratch-buffer sizes), so a linear scan is fine. */
+    OPAL_LIST_FOREACH (seg, &m->free_segs, opal_accel_device_seg_t) {
+        if (seg->size >= size && (NULL == best || seg->size < best->size)) {
+            best = seg;
+        }
     }
 
-    seg = OBJ_NEW(opal_accel_alloc_seg_t);
-    if (OPAL_LIKELY(NULL != seg)) {
-        seg->ptr = ptr;
-        opal_list_append(&ac->segs, &seg->super);
+    if (NULL != best) {
+        /* Reuse the cached block as-is (best->size already >= size). */
+        opal_list_remove_item(&m->free_segs, &best->super);
+        ptr = best->ptr;
+    } else {
+        if (OPAL_SUCCESS != opal_accelerator.mem_alloc(m->dev_id, &ptr, size)) {
+            OPAL_THREAD_UNLOCK(&m->lock);
+            return NULL;
+        }
+        best = OBJ_NEW(opal_accel_device_seg_t);
+        if (NULL == best) {
+            opal_accelerator.mem_release(m->dev_id, ptr);
+            OPAL_THREAD_UNLOCK(&m->lock);
+            return NULL;
+        }
+        best->ptr  = ptr;
+        best->size = size;
     }
+
+    opal_list_append(&m->outstanding_segs, &best->super);
+    OPAL_THREAD_UNLOCK(&m->lock);
     return ptr;
 }
 
-/* seg_free is wired into the allocator API but never invoked during normal
- * operation (basic allocator compact is a no-op).  Cleanup is handled
- * explicitly in opal_accelerator_base_frame_close via the segs list. */
-static void opal_accel_seg_free(void *ctx, void *seg)
+static void *opal_accel_device_realloc(mca_allocator_base_module_t *base, void *ptr, size_t size)
 {
-    (void) ctx;
-    (void) seg;
+    /* Device memory cannot be resized in place; unused by current callers. */
+    return NULL;
+}
+
+static void opal_accel_device_free(mca_allocator_base_module_t *base, void *ptr)
+{
+    opal_accel_device_allocator_t *m = (opal_accel_device_allocator_t *) base;
+    opal_accel_device_seg_t *seg;
+
+    if (NULL == ptr) {
+        return;
+    }
+
+    OPAL_THREAD_LOCK(&m->lock);
+    OPAL_LIST_FOREACH (seg, &m->outstanding_segs, opal_accel_device_seg_t) {
+        if (seg->ptr == ptr) {
+            opal_list_remove_item(&m->outstanding_segs, &seg->super);
+            opal_list_append(&m->free_segs, &seg->super);
+            OPAL_THREAD_UNLOCK(&m->lock);
+            return;
+        }
+    }
+    OPAL_THREAD_UNLOCK(&m->lock);
+
+    /* Unknown pointer (double free, or foreign pointer) -- release it
+     * directly to the device rather than silently dropping it. */
+    opal_accelerator.mem_release(m->dev_id, ptr);
+}
+
+static int opal_accel_device_compact(mca_allocator_base_module_t *base)
+{
+    return OPAL_SUCCESS;
+}
+
+static int opal_accel_device_finalize(mca_allocator_base_module_t *base)
+{
+    opal_accel_device_allocator_t *m = (opal_accel_device_allocator_t *) base;
+    opal_accel_device_seg_t *seg;
+
+    while (NULL != (seg = (opal_accel_device_seg_t *) opal_list_remove_first(&m->free_segs))) {
+        opal_accelerator.mem_release(m->dev_id, seg->ptr);
+        OBJ_RELEASE(seg);
+    }
+    /* Any segments still in outstanding_segs were never freed by their
+     * caller; leave them for the GPU driver to reclaim on context teardown,
+     * same as the previous allocator's documented behavior. */
+    while (NULL != (seg = (opal_accel_device_seg_t *) opal_list_remove_first(&m->outstanding_segs))) {
+        OBJ_RELEASE(seg);
+    }
+    OBJ_DESTRUCT(&m->free_segs);
+    OBJ_DESTRUCT(&m->outstanding_segs);
+    OBJ_DESTRUCT(&m->lock);
+    free(m);
+    return OPAL_SUCCESS;
 }
 
 mca_allocator_base_module_t *
 opal_accelerator_base_get_device_allocator(int dev_id)
 {
-    mca_allocator_base_module_t *alloc;
-    opal_accel_alloc_ctx_t *ctx;
-
     if (dev_id < 0 || NULL == opal_accelerator.mem_alloc) {
         return NULL;
     }
@@ -129,32 +209,23 @@ opal_accelerator_base_get_device_allocator(int dev_id)
     }
 
     if (NULL == opal_accel_device_allocators[dev_id]) {
-        ctx = (opal_accel_alloc_ctx_t *) malloc(sizeof(*ctx));
-        if (NULL == ctx) {
+        opal_accel_device_allocator_t *m =
+            (opal_accel_device_allocator_t *) malloc(sizeof(*m));
+        if (NULL == m) {
             OPAL_THREAD_UNLOCK(&opal_accel_alloc_lock);
             return NULL;
         }
-        ctx->dev_id = dev_id;
-        OBJ_CONSTRUCT(&ctx->segs, opal_list_t);
-        /*
-         * Use the basic (first-fit + coalescing) allocator rather than the
-         * bucket allocator.  When a large block is freed it can be split to
-         * serve a smaller future request, and adjacent free blocks are merged
-         * back together, giving good reuse across the varying scratch-buffer
-         * sizes produced by collective algorithms.  GPU segments are retained
-         * in the free list for the lifetime of the process; the GPU driver
-         * reclaims device memory on context teardown.
-         */
-        alloc = mca_allocator_basic_component_init(true,
-                                                   opal_accel_seg_alloc,
-                                                   opal_accel_seg_free,
-                                                   ctx);
-        if (NULL == alloc) {
-            free(ctx);
-            OPAL_THREAD_UNLOCK(&opal_accel_alloc_lock);
-            return NULL;
-        }
-        opal_accel_device_allocators[dev_id] = alloc;
+        m->dev_id             = dev_id;
+        OBJ_CONSTRUCT(&m->lock, opal_mutex_t);
+        OBJ_CONSTRUCT(&m->free_segs, opal_list_t);
+        OBJ_CONSTRUCT(&m->outstanding_segs, opal_list_t);
+        m->super.alc_alloc    = opal_accel_device_alloc;
+        m->super.alc_realloc  = opal_accel_device_realloc;
+        m->super.alc_free     = opal_accel_device_free;
+        m->super.alc_compact  = opal_accel_device_compact;
+        m->super.alc_finalize = opal_accel_device_finalize;
+        m->super.alc_context  = NULL;
+        opal_accel_device_allocators[dev_id] = &m->super;
     }
 
     OPAL_THREAD_UNLOCK(&opal_accel_alloc_lock);
@@ -171,21 +242,12 @@ static int opal_accelerator_base_frame_close(void)
     if (NULL != opal_accel_device_allocators) {
         for (int i = 0; i < opal_accel_num_devices; i++) {
             if (NULL != opal_accel_device_allocators[i]) {
-                opal_accel_alloc_ctx_t *ctx =
-                    (opal_accel_alloc_ctx_t *) opal_accel_device_allocators[i]->alc_context;
-                opal_accel_alloc_seg_t *seg;
-
-                /* Release all GPU segments tracked in seg_alloc before the
-                 * basic allocator frees its internal structures. */
-                while (NULL != (seg = (opal_accel_alloc_seg_t *)
-                                      opal_list_remove_first(&ctx->segs))) {
-                    opal_accelerator.mem_release(ctx->dev_id, seg->ptr);
-                    OBJ_RELEASE(seg);
-                }
-                OBJ_DESTRUCT(&ctx->segs);
-
+                /* alc_finalize frees the opal_accel_device_allocator_t itself;
+                 * the individual device buffers it handed out are released by
+                 * their owners via COLL_SESSION_FREE/alc_free before this
+                 * point, and the GPU driver reclaims device memory on
+                 * context teardown regardless. */
                 opal_accel_device_allocators[i]->alc_finalize(opal_accel_device_allocators[i]);
-                free(ctx);
                 opal_accel_device_allocators[i] = NULL;
             }
         }
