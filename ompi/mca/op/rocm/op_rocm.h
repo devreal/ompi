@@ -25,11 +25,26 @@ BEGIN_C_DECLS
  * as the first member named "super".  The HIP stream and shutdown flag are
  * stored directly here rather than in a separate priv allocation.
  * Allocated with OBJ_NEW; the OBJ destructor chain releases GPU resources.
+ *
+ * super.cmd and shutdown both live in plain device memory (hipMalloc) --
+ * they're what the persistent kernel polls, so they need to be fast for the
+ * GPU to access, not host-dereferenceable. host_cmd/host_shutdown are
+ * registered (page-locked) host mirrors that the host writes/reads
+ * directly; transfers between the host and device copies happen via
+ * explicit hipMemcpyAsync on ctrl_stream. This avoids hipMallocManaged for
+ * both slots: the cmd_queue pool (ompi_op_gpu_session.c) relaunches the
+ * persistent kernel on every single collective call and kills it again at
+ * session end, so shutdown sees the same host/device read-write ping-pong
+ * on every call that cmd sees on every reduction -- managed memory would
+ * fault on both.
  */
 typedef struct ompi_op_rocm_cmd_queue_t {
-    ompi_op_gpu_cmd_queue_t  super;       /* MUST be first */
-    volatile int32_t        *shutdown;    /* managed-memory shutdown flag */
-    hipStream_t              stream;      /* private HIP stream */
+    ompi_op_gpu_cmd_queue_t  super;       /* MUST be first; super.cmd is device memory */
+    volatile int32_t        *shutdown;    /* device-resident shutdown flag, polled by the kernel */
+    hipStream_t              stream;      /* private HIP stream running the persistent kernel */
+    ompi_op_gpu_cmd_t       *host_cmd;    /* registered host mirror of super.cmd */
+    int32_t                 *host_shutdown; /* registered host mirror of shutdown */
+    hipStream_t              ctrl_stream; /* dedicated stream for host<->device cmd transfers */
 } ompi_op_rocm_cmd_queue_t;
 OBJ_CLASS_DECLARATION(ompi_op_rocm_cmd_queue_t);
 

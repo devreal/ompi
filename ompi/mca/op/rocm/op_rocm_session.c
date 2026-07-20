@@ -15,20 +15,39 @@
  *
  * ompi_op_rocm_cmd_queue_t inherits ompi_op_gpu_cmd_queue_t.  OBJ_NEW
  * allocates the object; the OBJ destructor releases the HIP stream and
- * managed memory.  The component returns the base pointer from alloc so
+ * device/host memory.  The component returns the base pointer from alloc so
  * callers need no knowledge of the concrete type.
  *
+ * The command slot and shutdown flag the persistent kernel polls
+ * (queue->cmd, cq->shutdown) both live in plain device memory, not
+ * hipMallocManaged. cmd is touched by the host and the kernel on every
+ * single reduction call; shutdown is touched on every single collective
+ * call, since ompi_op_gpu_session.c's cmd_queue pool relaunches the
+ * persistent kernel at session_begin and kills it again at session_end (the
+ * pool only spares the hipMalloc-level resources, not the kernel launch
+ * itself). Both patterns are exactly the host/device read-write ping-pong
+ * that drives constant page migration faults under managed memory. Instead
+ * the host stages each command/shutdown update in a registered
+ * (page-locked) mirror (cq->host_cmd, cq->host_shutdown) and moves it
+ * to/from the device slot with explicit hipMemcpyAsync on a dedicated
+ * ctrl_stream. ctrl_stream must be different from the persistent kernel's
+ * own stream: that stream is occupied indefinitely by the kernel, so
+ * anything enqueued there would queue behind it and never run.
+ *
  * session_begin:   look up the kernel for (op, dtype), reset the cmd_queue
- *                  state, and launch the persistent kernel on the existing
- *                  stream.  Wires all session dispatch hooks and returns the
- *                  session.  Returns NULL if no kernel exists.
+ *                  and shutdown state (via the host mirrors + a push to the
+ *                  device slots), and launch the persistent kernel on the
+ *                  existing stream.  Wires all session dispatch hooks and
+ *                  returns the session.  Returns NULL if no kernel exists.
  *
- * session_reduce:  write src/dst/count to the command slot, set status=1
- *                  to wake the kernel, and spin until status==2.
+ * session_reduce:  stage src/dst/count and status=1 into host_cmd, push it
+ *                  to the device slot, then poll the device slot's status
+ *                  by copying it back until it reads 2.
  *
- * session_stop:    signal the persistent kernel to exit and synchronize the
- *                  stream.  The cmd_queue's HIP stream and managed memory
- *                  remain allocated for reuse.
+ * session_stop:    push shutdown=1 to the device slot and synchronize the
+ *                  kernel's stream to wait for it to exit.  The cmd_queue's
+ *                  HIP stream and device/host memory remain allocated for
+ *                  reuse.
  */
 
 #include "ompi_config.h"
@@ -62,6 +81,9 @@ ompi_op_rocm_cmd_queue_construct(ompi_op_rocm_cmd_queue_t *q)
 {
     q->shutdown       = NULL;
     q->stream         = NULL;
+    q->host_cmd       = NULL;
+    q->host_shutdown  = NULL;
+    q->ctrl_stream    = NULL;
     q->super.cmd      = NULL;
     q->super.dev_id   = -1;
     q->super.allocator = NULL;
@@ -75,6 +97,10 @@ ompi_op_rocm_cmd_queue_destruct(ompi_op_rocm_cmd_queue_t *q)
         hipStreamDestroy(q->stream);
         q->stream = NULL;
     }
+    if (NULL != q->ctrl_stream) {
+        hipStreamDestroy(q->ctrl_stream);
+        q->ctrl_stream = NULL;
+    }
     if (NULL != q->shutdown) {
         hipFree((void *) q->shutdown);
         q->shutdown = NULL;
@@ -82,6 +108,14 @@ ompi_op_rocm_cmd_queue_destruct(ompi_op_rocm_cmd_queue_t *q)
     if (NULL != q->super.cmd) {
         hipFree(q->super.cmd);
         q->super.cmd = NULL;
+    }
+    if (NULL != q->host_cmd) {
+        hipHostFree(q->host_cmd);
+        q->host_cmd = NULL;
+    }
+    if (NULL != q->host_shutdown) {
+        hipHostFree(q->host_shutdown);
+        q->host_shutdown = NULL;
     }
 }
 
@@ -92,6 +126,13 @@ OBJ_CLASS_INSTANCE(ompi_op_rocm_cmd_queue_t,
 
 /* --------------------------------------------------------------------------
  * ompi_op_rocm_cmd_queue_alloc
+ *
+ * Allocate the expensive GPU resources for one device: a device-resident
+ * command slot and shutdown flag (both polled by the persistent kernel),
+ * registered host mirrors of each (staged and pushed to the device slots by
+ * the host on every reduction/session-begin/session-stop call), and two
+ * private HIP streams -- one for the persistent kernel, one for
+ * host<->device transfers.
  * -------------------------------------------------------------------------- */
 ompi_op_gpu_cmd_queue_t *
 ompi_op_rocm_cmd_queue_alloc(int dev_id)
@@ -103,32 +144,67 @@ ompi_op_rocm_cmd_queue_alloc(int dev_id)
 
     hipError_t err;
 
-    /* Allocate managed-memory command slot (accessible by both CPU and GPU) */
-    err = hipMallocManaged((void **) &q->super.cmd,
-                           sizeof(ompi_op_gpu_cmd_t),
-                           hipMemAttachGlobal);
+    /* Device-resident command slot: what the persistent kernel polls. */
+    err = hipMalloc((void **) &q->super.cmd, sizeof(ompi_op_gpu_cmd_t));
     if (hipSuccess != err) {
         OBJ_RELEASE(q);
         return NULL;
     }
-    q->super.cmd->src1   = NULL;
-    q->super.cmd->src2   = NULL;
-    q->super.cmd->dst    = NULL;
-    q->super.cmd->count  = 0;
-    q->super.cmd->status = 0;
 
-    /* Allocate managed-memory shutdown flag */
-    err = hipMallocManaged((void **) &q->shutdown,
-                           sizeof(int32_t),
-                           hipMemAttachGlobal);
+    /* Registered (page-locked) host mirror: staged by the host with plain
+     * stores, and used as the source/destination of the explicit
+     * hipMemcpyAsync calls that move commands to/from the device slot. */
+    err = hipHostMalloc((void **) &q->host_cmd, sizeof(ompi_op_gpu_cmd_t), hipHostMallocDefault);
     if (hipSuccess != err) {
         OBJ_RELEASE(q);
         return NULL;
     }
-    *q->shutdown = 0;
+    q->host_cmd->src1   = NULL;
+    q->host_cmd->src2   = NULL;
+    q->host_cmd->dst    = NULL;
+    q->host_cmd->count  = 0;
+    q->host_cmd->status = 0;
 
-    /* Create a dedicated non-blocking stream for this cmd_queue */
+    /* Push the initial state down to the device slot. */
+    err = hipMemcpy(q->super.cmd, q->host_cmd, sizeof(ompi_op_gpu_cmd_t),
+                    hipMemcpyHostToDevice);
+    if (hipSuccess != err) {
+        OBJ_RELEASE(q);
+        return NULL;
+    }
+
+    /* Device-resident shutdown flag: what the persistent kernel polls in
+     * its outer loop, plus its registered host mirror. Relaunched/killed on
+     * every collective call (see the file-level comment above), so this
+     * needs the same treatment as cmd above -- not hipMallocManaged. */
+    err = hipMalloc((void **) &q->shutdown, sizeof(int32_t));
+    if (hipSuccess != err) {
+        OBJ_RELEASE(q);
+        return NULL;
+    }
+    err = hipHostMalloc((void **) &q->host_shutdown, sizeof(int32_t), hipHostMallocDefault);
+    if (hipSuccess != err) {
+        OBJ_RELEASE(q);
+        return NULL;
+    }
+    *q->host_shutdown = 0;
+    err = hipMemcpy((void *) q->shutdown, q->host_shutdown, sizeof(int32_t),
+                    hipMemcpyHostToDevice);
+    if (hipSuccess != err) {
+        OBJ_RELEASE(q);
+        return NULL;
+    }
+
+    /* Persistent-kernel compute stream. */
     err = hipStreamCreateWithFlags(&q->stream, hipStreamNonBlocking);
+    if (hipSuccess != err) {
+        OBJ_RELEASE(q);
+        return NULL;
+    }
+
+    /* Dedicated stream for host<->device cmd transfers -- must differ from
+     * q->stream, which the persistent kernel occupies indefinitely. */
+    err = hipStreamCreateWithFlags(&q->ctrl_stream, hipStreamNonBlocking);
     if (hipSuccess != err) {
         OBJ_RELEASE(q);
         return NULL;
@@ -163,17 +239,29 @@ ompi_op_rocm_session_begin(ompi_op_gpu_cmd_queue_t *queue,
 
     ompi_op_rocm_cmd_queue_t *cq = (ompi_op_rocm_cmd_queue_t *) queue;
 
-    /* Reset queue state for the new kernel */
-    *cq->shutdown      = 0;
-    queue->cmd->src1   = NULL;
-    queue->cmd->src2   = NULL;
-    queue->cmd->dst    = NULL;
-    queue->cmd->count  = 0;
-    queue->cmd->status = 0;
+    /* Reset queue and shutdown state for the new kernel: both queue->cmd
+     * and cq->shutdown are device memory, so reset the registered host
+     * mirrors and push them down rather than dereferencing the device
+     * pointers directly. Both copies are enqueued on ctrl_stream before a
+     * single synchronize, rather than synchronizing after each. */
+    cq->host_cmd->src1   = NULL;
+    cq->host_cmd->src2   = NULL;
+    cq->host_cmd->dst    = NULL;
+    cq->host_cmd->count  = 0;
+    cq->host_cmd->status = 0;
+    *cq->host_shutdown   = 0;
+    hipMemcpyAsync(queue->cmd, cq->host_cmd, sizeof(ompi_op_gpu_cmd_t),
+                   hipMemcpyHostToDevice, cq->ctrl_stream);
+    hipMemcpyAsync((void *) cq->shutdown, cq->host_shutdown, sizeof(int32_t),
+                   hipMemcpyHostToDevice, cq->ctrl_stream);
+    hipError_t err = hipStreamSynchronize(cq->ctrl_stream);
+    if (hipSuccess != err) {
+        return NULL;
+    }
 
     /* Launch the persistent kernel (1 block, 256 threads) */
     launcher(queue->cmd, cq->shutdown, cq->stream);
-    hipError_t err = hipGetLastError();
+    err = hipGetLastError();
     if (hipSuccess != err) {
         return NULL;
     }
@@ -199,31 +287,50 @@ ompi_op_rocm_session_reduce(ompi_op_gpu_session_t *session,
                              const void *src1, const void *src2,
                              void *dst, size_t count)
 {
-    ompi_op_gpu_cmd_t *cmd = session->queue->cmd;
+    ompi_op_rocm_cmd_queue_t *cq = (ompi_op_rocm_cmd_queue_t *) session->queue;
+    ompi_op_gpu_cmd_t *host_cmd  = cq->host_cmd;
+    ompi_op_gpu_cmd_t *dev_cmd   = session->queue->cmd;
 
-    /* Write operands before signalling the kernel */
-    cmd->src1  = src1;
-    cmd->src2  = src2;
-    cmd->dst   = dst;
-    cmd->count = (int64_t) count;
+    /* Stage the command in registered host memory, then push it to the
+     * device-resident slot the persistent kernel polls, on the dedicated
+     * ctrl_stream (cq->stream is occupied indefinitely by the kernel
+     * itself, so anything enqueued there would never run). */
+    host_cmd->src1   = src1;
+    host_cmd->src2   = src2;
+    host_cmd->dst    = dst;
+    host_cmd->count  = (int64_t) count;
+    host_cmd->status = 1;
+    hipMemcpyAsync(dev_cmd, host_cmd, sizeof(*host_cmd),
+                   hipMemcpyHostToDevice, cq->ctrl_stream);
 
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);   /* ensure writes visible to GPU */
-    cmd->status = 1;                           /* wake the kernel */
+    /* Poll for completion by copying the status word back. Stream ordering
+     * guarantees each of these copies lands only after the post above (and
+     * after the kernel's own write once it runs), so no extra
+     * synchronization is needed beyond waiting for each individual copy.
+     * Spin on hipStreamQuery rather than hipStreamSynchronize so a pending
+     * wait busy-polls instead of taking the driver's blocking/sleep path,
+     * matching the low-latency spin this replaced. */
+    do {
+        hipMemcpyAsync((void *) &host_cmd->status, (const void *) &dev_cmd->status,
+                       sizeof(dev_cmd->status), hipMemcpyDeviceToHost, cq->ctrl_stream);
+        while (hipSuccess != hipStreamQuery(cq->ctrl_stream)) {
+            sched_yield();   /* relinquish CPU timeslice while waiting */
+        }
+    } while (2 != host_cmd->status);
 
-    /* Spin-wait for the kernel to signal completion */
-    while (2 != cmd->status) {
-        sched_yield();   /* relinquish CPU timeslice while waiting */
-    }
-
-    /* Reset for the next call */
-    cmd->status = 0;
+    /* No separate reset-to-0 round trip is needed: the next call's post
+     * overwrites the device status with 1 directly, and the kernel's own
+     * wait loop only ever tests for == 1, so a stale 2 left behind here is
+     * harmless. */
 }
 
 /* --------------------------------------------------------------------------
  * ompi_op_rocm_session_stop
  *
- * Signal the persistent kernel to exit and wait for the stream to drain.
- * The cmd_queue's stream and managed memory remain allocated for reuse.
+ * Push shutdown=1 to the device slot and wait for the kernel's own stream
+ * to drain -- the kernel only returns once it observes the update, so this
+ * one synchronize is sufficient without a separate wait on ctrl_stream.
+ * The cmd_queue's stream and device/host memory remain allocated for reuse.
  * -------------------------------------------------------------------------- */
 static void
 ompi_op_rocm_session_stop(ompi_op_gpu_session_t *session)
@@ -231,8 +338,9 @@ ompi_op_rocm_session_stop(ompi_op_gpu_session_t *session)
     ompi_op_rocm_cmd_queue_t *cq = (ompi_op_rocm_cmd_queue_t *) session->queue;
 
     /* Signal the kernel to exit its loop */
-    *cq->shutdown = 1;
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    *cq->host_shutdown = 1;
+    hipMemcpyAsync((void *) cq->shutdown, cq->host_shutdown, sizeof(int32_t),
+                   hipMemcpyHostToDevice, cq->ctrl_stream);
 
     /* Wait for the kernel to finish; stream remains valid after this */
     hipStreamSynchronize(cq->stream);

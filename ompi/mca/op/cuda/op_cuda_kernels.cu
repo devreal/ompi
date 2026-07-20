@@ -13,12 +13,15 @@
  * Persistent reduction kernels for the CUDA op component.
  *
  * Each kernel runs one block of 256 threads and loops indefinitely,
- * sleeping between polls to reduce power consumption.  The host posts
- * a command by writing src/dst/count into the managed-memory slot and
- * then setting status=1.  The kernel executes the reduction, then sets
- * status=2.  The host spins on status until it sees 2, then resets it
- * to 0 for the next call.  A separate shutdown flag terminates the loop
- * at session end.
+ * sleeping between polls to reduce power consumption.  cmd lives in plain
+ * device memory (see op_cuda_session.c): the host stages src/dst/count and
+ * status=1 into a registered host mirror and pushes it down with an
+ * explicit cudaMemcpyAsync, then polls this device slot's status by
+ * copying it back until it reads 2.  The kernel here only ever sees
+ * ordinary device-memory reads/writes -- it does not know or care that the
+ * host side of the handoff goes through a memcpy rather than a shared
+ * managed-memory pointer.  A separate shutdown flag terminates the loop at
+ * session end.
  */
 
 #include <stdint.h>
