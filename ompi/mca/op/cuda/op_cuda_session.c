@@ -17,36 +17,46 @@
  * device/host memory.  The component returns the base pointer from alloc so
  * callers need no knowledge of the concrete type.
  *
- * The command slot and shutdown flag the persistent kernel polls
- * (queue->cmd, cq->shutdown) both live in plain device memory, not
- * cudaMallocManaged. cmd is touched by the host and the kernel on every
- * single reduction call; shutdown is touched on every single collective
- * call, since ompi_op_gpu_session.c's cmd_queue pool relaunches the
- * persistent kernel at session_begin and kills it again at session_end (the
- * pool only spares the cudaMalloc-level resources, not the kernel launch
- * itself). Both patterns are exactly the host/device read-write ping-pong
- * that drives constant page migration faults under Unified Memory. Instead
- * the host stages each command/shutdown update in a registered
- * (page-locked) mirror (cq->host_cmd, cq->host_shutdown) and moves it
- * to/from the device slot with explicit cudaMemcpyAsync on a dedicated
- * ctrl_stream. ctrl_stream must be different from the persistent kernel's
- * own stream: that stream is occupied indefinitely by the kernel, so
- * anything enqueued there would queue behind it and never run.
+ * The command slot the persistent kernel polls (queue->cmd) lives in plain
+ * device memory, not cudaMallocManaged: it's touched by the host and the
+ * kernel on every single reduction call, and that back-and-forth drove
+ * constant page migration faults under Unified Memory. Instead the host
+ * stages each command in a registered (page-locked) mirror, cq->host_cmd,
+ * and moves it to/from the device slot with explicit cudaMemcpyAsync on a
+ * dedicated ctrl_stream. ctrl_stream must be different from the persistent
+ * kernel's own stream: that stream is occupied indefinitely by the kernel,
+ * so anything enqueued there would queue behind it and never run.
  *
- * session_begin:   look up the kernel for (op, dtype), reset the cmd_queue
- *                  and shutdown state (via the host mirrors + a push to the
- *                  device slots), and launch the persistent kernel on the
- *                  existing stream.  Wires all session dispatch hooks and
- *                  returns the session.  Returns NULL if no kernel exists.
+ * There is no separate shutdown flag/allocation: cmd->status doubles as the
+ * shutdown signal (a negative value requests it), posted through the exact
+ * same host_cmd/ctrl_stream channel as a normal reduction. The kernel
+ * resets status back to 0 itself before exiting (see op_cuda_kernels.cu),
+ * so a cmd_queue pulled back out of the pool is always already idle --
+ * session_begin never needs to push a reset.
  *
- * session_reduce:  stage src/dst/count and status=1 into host_cmd, push it
- *                  to the device slot, then poll the device slot's status
- *                  by copying it back until it reads 2.
+ * The persistent kernel is also launched lazily, on the first
+ * session_reduce() call rather than in session_begin(): not every rank
+ * that creates a session ends up reducing anything (e.g. leaf ranks in a
+ * reduction tree only forward data upward), so deferring the actual launch
+ * avoids paying kernel launch/teardown cost for sessions that turn out to
+ * do zero reductions. ompi_op_gpu_session_t::started tracks whether this
+ * session's launch has happened yet.
  *
- * session_stop:    push shutdown=1 to the device slot and synchronize the
- *                  kernel's stream to wait for it to exit.  The cmd_queue's
- *                  GPU stream and device/host memory remain allocated for
- *                  reuse.
+ * session_begin:   look up the kernel for (op, dtype) -- returns NULL if
+ *                  none exists -- and stash the resolved launcher for the
+ *                  deferred launch.  Does not touch the cmd_queue or launch
+ *                  anything.
+ *
+ * session_reduce:  on the first call, launch the persistent kernel.  Then
+ *                  stage src/dst/count and status=1 into host_cmd, push it
+ *                  to the device slot, and poll the device slot's status by
+ *                  copying it back until it reads 2.
+ *
+ * session_stop:    a no-op if the kernel was never launched (session never
+ *                  reduced anything).  Otherwise push the shutdown sentinel
+ *                  and synchronize the kernel's stream to wait for it to
+ *                  exit.  The cmd_queue's GPU stream and device/host memory
+ *                  remain allocated for reuse.
  */
 
 #include "ompi_config.h"
@@ -56,6 +66,7 @@
 
 #include <cuda_runtime.h>
 
+#include "opal/util/output.h"
 #include "opal/mca/accelerator/base/base.h"
 #include "ompi/op/op.h"
 #include "ompi/datatype/ompi_datatype.h"
@@ -78,10 +89,8 @@ static void ompi_op_cuda_session_stop(ompi_op_gpu_session_t *session);
 static void
 ompi_op_cuda_cmd_queue_construct(ompi_op_cuda_cmd_queue_t *q)
 {
-    q->shutdown       = NULL;
     q->stream         = NULL;
     q->host_cmd       = NULL;
-    q->host_shutdown  = NULL;
     q->ctrl_stream    = NULL;
     q->super.cmd      = NULL;
     q->super.dev_id   = -1;
@@ -100,10 +109,6 @@ ompi_op_cuda_cmd_queue_destruct(ompi_op_cuda_cmd_queue_t *q)
         cudaStreamDestroy(q->ctrl_stream);
         q->ctrl_stream = NULL;
     }
-    if (NULL != q->shutdown) {
-        cudaFree((void *) q->shutdown);
-        q->shutdown = NULL;
-    }
     if (NULL != q->super.cmd) {
         cudaFree(q->super.cmd);
         q->super.cmd = NULL;
@@ -111,10 +116,6 @@ ompi_op_cuda_cmd_queue_destruct(ompi_op_cuda_cmd_queue_t *q)
     if (NULL != q->host_cmd) {
         cudaFreeHost(q->host_cmd);
         q->host_cmd = NULL;
-    }
-    if (NULL != q->host_shutdown) {
-        cudaFreeHost(q->host_shutdown);
-        q->host_shutdown = NULL;
     }
 }
 
@@ -127,12 +128,11 @@ OBJ_CLASS_INSTANCE(ompi_op_cuda_cmd_queue_t,
  * ompi_op_cuda_cmd_queue_alloc
  *
  * Allocate the expensive GPU resources for one device: a device-resident
- * command slot and shutdown flag (both polled by the persistent kernel),
- * registered host mirrors of each (staged and pushed to the device slots by
- * the host on every reduction/session-begin/session-stop call), and two
- * private CUDA streams -- one for the persistent kernel, one for
- * host<->device transfers. Returns the base pointer
- * (ompi_op_gpu_cmd_queue_t *); NULL on failure.
+ * command slot (polled by the persistent kernel), a registered host mirror
+ * of it (staged and pushed to the device slot by the host on every
+ * reduction call, and to signal shutdown), and two private CUDA streams --
+ * one for the persistent kernel, one for host<->device transfers. Returns
+ * the base pointer (ompi_op_gpu_cmd_queue_t *); NULL on failure.
  * -------------------------------------------------------------------------- */
 ompi_op_gpu_cmd_queue_t *
 ompi_op_cuda_cmd_queue_alloc(int dev_id)
@@ -165,30 +165,11 @@ ompi_op_cuda_cmd_queue_alloc(int dev_id)
     q->host_cmd->count  = 0;
     q->host_cmd->status = 0;
 
-    /* Push the initial state down to the device slot. */
+    /* Push the initial (idle) state down to the device slot. No kernel is
+     * running yet at this point (the persistent kernel is launched lazily,
+     * on the first reduction), so this just establishes status == 0 for
+     * whichever launch eventually happens first. */
     err = cudaMemcpy(q->super.cmd, q->host_cmd, sizeof(ompi_op_gpu_cmd_t),
-                     cudaMemcpyHostToDevice);
-    if (cudaSuccess != err) {
-        OBJ_RELEASE(q);
-        return NULL;
-    }
-
-    /* Device-resident shutdown flag: what the persistent kernel polls in
-     * its outer loop, plus its registered host mirror. Relaunched/killed on
-     * every collective call (see the file-level comment above), so this
-     * needs the same treatment as cmd above -- not cudaMallocManaged. */
-    err = cudaMalloc((void **) &q->shutdown, sizeof(int32_t));
-    if (cudaSuccess != err) {
-        OBJ_RELEASE(q);
-        return NULL;
-    }
-    err = cudaMallocHost((void **) &q->host_shutdown, sizeof(int32_t));
-    if (cudaSuccess != err) {
-        OBJ_RELEASE(q);
-        return NULL;
-    }
-    *q->host_shutdown = 0;
-    err = cudaMemcpy((void *) q->shutdown, q->host_shutdown, sizeof(int32_t),
                      cudaMemcpyHostToDevice);
     if (cudaSuccess != err) {
         OBJ_RELEASE(q);
@@ -218,10 +199,10 @@ ompi_op_cuda_cmd_queue_alloc(int dev_id)
 /* --------------------------------------------------------------------------
  * ompi_op_cuda_session_begin
  *
- * Look up the GPU kernel for (op, dtype), reset the cmd_queue state, and
- * launch the persistent kernel on the existing stream.  Wires all session
- * dispatch hooks before returning.  Returns NULL if no GPU kernel exists
- * for this combination or if the kernel launch fails.
+ * Look up the GPU kernel for (op, dtype) and wire the session's dispatch
+ * hooks. Returns NULL if no GPU kernel exists for this combination. The
+ * persistent kernel itself is launched lazily by session_reduce() on its
+ * first call, not here -- see the file-level comment above.
  * -------------------------------------------------------------------------- */
 ompi_op_gpu_session_t *
 ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
@@ -242,35 +223,12 @@ ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
         return NULL;
     }
 
-    ompi_op_cuda_cmd_queue_t *cq = (ompi_op_cuda_cmd_queue_t *) queue;
-
-    /* Reset queue and shutdown state for the new kernel: both queue->cmd
-     * and cq->shutdown are device memory, so reset the registered host
-     * mirrors and push them down rather than dereferencing the device
-     * pointers directly. Both copies are enqueued on ctrl_stream before a
-     * single synchronize, rather than synchronizing after each. */
-    cq->host_cmd->src1     = NULL;
-    cq->host_cmd->src2     = NULL;
-    cq->host_cmd->dst      = NULL;
-    cq->host_cmd->count    = 0;
-    cq->host_cmd->status   = 0;
-    *cq->host_shutdown     = 0;
-    cudaMemcpyAsync(queue->cmd, cq->host_cmd, sizeof(ompi_op_gpu_cmd_t),
-                    cudaMemcpyHostToDevice, cq->ctrl_stream);
-    cudaMemcpyAsync((void *) cq->shutdown, cq->host_shutdown, sizeof(int32_t),
-                    cudaMemcpyHostToDevice, cq->ctrl_stream);
-    cudaError_t err = cudaStreamSynchronize(cq->ctrl_stream);
-    if (cudaSuccess != err) {
-        return NULL;
-    }
-
-    /* Launch the persistent kernel */
-    launcher(queue->cmd, cq->shutdown, cq->stream);
-    err = cudaGetLastError();
-    if (cudaSuccess != err) {
-        return NULL;
-    }
-
+    /* This only validates that a kernel exists for (op, dtype) and stashes
+     * it for the deferred launch -- it does not touch the cmd_queue or
+     * launch anything. cmd_queue_alloc() already left queue->cmd idle
+     * (status == 0), and the kernel resets it back to idle itself before
+     * exiting on shutdown, so a reused queue is always ready without a
+     * reset here. See ompi_op_cuda_session_reduce() for the actual launch. */
     ompi_op_gpu_session_t *session =
         (ompi_op_gpu_session_t *) malloc(sizeof(ompi_op_gpu_session_t));
     if (NULL == session) {
@@ -281,6 +239,8 @@ ompi_op_cuda_session_begin(ompi_op_gpu_cmd_queue_t *queue,
     session->allocator = queue->allocator;
     session->reduce_fn = ompi_op_cuda_session_reduce;
     session->stop_fn   = ompi_op_cuda_session_stop;
+    session->started   = false;
+    session->launcher  = (void *) launcher;
     return session;
 }
 
@@ -295,6 +255,30 @@ ompi_op_cuda_session_reduce(ompi_op_gpu_session_t *session,
     ompi_op_cuda_cmd_queue_t *cq = (ompi_op_cuda_cmd_queue_t *) session->queue;
     ompi_op_gpu_cmd_t *host_cmd  = cq->host_cmd;
     ompi_op_gpu_cmd_t *dev_cmd   = session->queue->cmd;
+
+    if (!session->started) {
+        /* Lazy launch: this is the first (and possibly only) reduction
+         * this session performs. Many sessions never reach this point at
+         * all (e.g. leaf ranks in a reduction tree only forward data
+         * upward), so deferring the launch to here avoids paying
+         * persistent-kernel launch/teardown cost for those. */
+        ompi_op_cuda_launcher_fn_t launcher = (ompi_op_cuda_launcher_fn_t) session->launcher;
+        launcher(dev_cmd, cq->stream);
+        cudaError_t err = cudaGetLastError();
+        if (cudaSuccess != err) {
+            /* session_begin already validated that a kernel exists for this
+             * (op, dtype), so a failure here is a genuine CUDA runtime/driver
+             * error, not a "no kernel" case. There is no viable host-side
+             * fallback for a reduction over device-resident buffers, and
+             * silently continuing would just hang forever in the poll loop
+             * below waiting for a status update a kernel that never started
+             * will never produce -- so treat this as fatal. */
+            opal_output(0, "op/cuda: persistent kernel launch failed on device %d: %s",
+                       cq->super.dev_id, cudaGetErrorString(err));
+            abort();
+        }
+        session->started = true;
+    }
 
     /* Stage the command in registered host memory, then push it to the
      * device-resident slot the persistent kernel polls, on the dedicated
@@ -332,20 +316,29 @@ ompi_op_cuda_session_reduce(ompi_op_gpu_session_t *session,
 /* --------------------------------------------------------------------------
  * ompi_op_cuda_session_stop
  *
- * Push shutdown=1 to the device slot and wait for the kernel's own stream
- * to drain -- the kernel only returns once it observes the update, so this
- * one synchronize is sufficient without a separate wait on ctrl_stream.
- * The cmd_queue's stream and device/host memory remain allocated for reuse.
+ * A no-op if the persistent kernel was never launched (this session never
+ * reduced anything). Otherwise push the shutdown sentinel (a negative
+ * status) through the host_cmd/ctrl_stream channel and wait for the
+ * kernel's own stream to drain -- the kernel only returns once it observes
+ * the update, so this one synchronize is sufficient without a separate
+ * wait on ctrl_stream. The cmd_queue's stream and device/host memory
+ * remain allocated for reuse.
  * -------------------------------------------------------------------------- */
 static void
 ompi_op_cuda_session_stop(ompi_op_gpu_session_t *session)
 {
+    if (!session->started) {
+        return;
+    }
+
     ompi_op_cuda_cmd_queue_t *cq = (ompi_op_cuda_cmd_queue_t *) session->queue;
+    ompi_op_gpu_cmd_t *host_cmd  = cq->host_cmd;
+    ompi_op_gpu_cmd_t *dev_cmd   = cq->super.cmd;
 
     /* Signal the kernel to exit its loop */
-    *cq->host_shutdown = 1;
-    cudaMemcpyAsync((void *) cq->shutdown, cq->host_shutdown, sizeof(int32_t),
-                    cudaMemcpyHostToDevice, cq->ctrl_stream);
+    host_cmd->status = -1;
+    cudaMemcpyAsync((void *) &dev_cmd->status, (const void *) &host_cmd->status,
+                    sizeof(host_cmd->status), cudaMemcpyHostToDevice, cq->ctrl_stream);
 
     /* Wait for the kernel to finish; stream remains valid after this */
     cudaStreamSynchronize(cq->stream);

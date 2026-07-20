@@ -20,8 +20,27 @@
  * copying it back until it reads 2.  The kernel here only ever sees
  * ordinary device-memory reads/writes -- it does not know or care that the
  * host side of the handoff goes through a memcpy rather than a shared
- * managed-memory pointer.  A separate shutdown flag terminates the loop at
- * session end.
+ * managed-memory pointer.
+ *
+ * There is no separate shutdown flag: status < 0 is the shutdown sentinel,
+ * posted through the exact same channel as a normal command. Every thread
+ * polls cmd->status independently (sleeping between polls, as before), but
+ * a __syncthreads() right after that poll loop -- before anyone acts on
+ * what they saw -- is required for correctness, not just efficiency: on
+ * shutdown, thread 0 resets status back to 0 (see below) so the slot is
+ * idle for the next launch. Without the barrier, thread 0 could perform
+ * that reset while a slower thread is still inside its own poll loop; that
+ * thread would then observe the fresh 0 instead of the sentinel it needed
+ * to see to break out, and spin forever waiting for a status update that
+ * will never come -- hanging the whole block, and thus session_stop's
+ * cudaStreamSynchronize. The barrier guarantees every thread has already
+ * exited its poll loop (having observed the same nonzero value -- nothing
+ * else writes status in the window between that and the branch below) by
+ * the time any thread performs the reset.
+ *
+ * On shutdown, thread 0 resets status back to 0 (idle) itself before the
+ * kernel returns, so the device slot is already ready for the next launch
+ * without the host ever needing to push a reset.
  */
 
 #include <stdint.h>
@@ -38,13 +57,26 @@
  * e.g. "dst[i] = src1[i] + src2[i]".  src2 may alias dst for in-place ops.
  * ------------------------------------------------------------------------- */
 #define PERSISTENT_KERNEL(kname, ctype, op_expr)                               \
-__global__ void ompi_op_cuda_persistent_##kname(                               \
-        ompi_op_gpu_cmd_t *cmd, volatile int32_t *shutdown)                    \
+__global__ void ompi_op_cuda_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         \
 {                                                                               \
-    while (!*shutdown) {                                                        \
-        /* Spin-wait for work; sleep 1 µs between polls to save power */        \
-        while (cmd->status != 1 && !*shutdown) { __nanosleep(1000); }          \
-        if (*shutdown) break;                                                   \
+    while (1) {                                                                \
+        /* Spin-wait for a new command or a shutdown request; sleep 1 µs       \
+         * between polls to save power. status == 2 means the previous       \
+         * result hasn't been reclaimed by the host yet -- keep waiting in    \
+         * that case too, or every thread would immediately redo the last    \
+         * reduction on stale operands instead of sleeping. status < 0 is    \
+         * the shutdown sentinel. */                                          \
+        while (cmd->status != 1 && cmd->status >= 0) { __nanosleep(1000); }  \
+        /* Every thread has now individually exited its poll loop above --    \
+         * required before anyone acts on the shutdown branch below; see      \
+         * the file comment for why. */                                        \
+        __syncthreads();                                                        \
+        if (cmd->status < 0) {                                                 \
+            /* Leave the slot idle (status == 0) for the next launch -- the   \
+             * host never needs to push a reset. */                            \
+            if (threadIdx.x == 0) { cmd->status = 0; }                        \
+            break;                                                             \
+        }                                                                      \
         const ctype * __restrict__ src1 = (const ctype *) cmd->src1;           \
         const ctype * __restrict__ src2 = (const ctype *) cmd->src2;           \
               ctype * __restrict__ dst  = (      ctype *) cmd->dst;            \
@@ -147,10 +179,9 @@ PERSISTENT_KERNEL(bxor_uint64, uint64_t, dst[i] = src1[i] ^ src2[i])
  * ========================================================================= */
 #define LAUNCHER(kname)                                                        \
 static void launch_##kname(ompi_op_gpu_cmd_t *cmd,                            \
-                            volatile int32_t  *sd,                             \
                             cudaStream_t       stream)                         \
 {                                                                               \
-    ompi_op_cuda_persistent_##kname<<<1, 256, 0, stream>>>(cmd, sd);          \
+    ompi_op_cuda_persistent_##kname<<<1, 256, 0, stream>>>(cmd);              \
 }
 
 LAUNCHER(max_int8)    LAUNCHER(max_uint8)

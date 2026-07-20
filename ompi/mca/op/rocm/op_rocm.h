@@ -22,28 +22,30 @@ BEGIN_C_DECLS
 
 /**
  * ROCm-specific cmd_queue.  Inherits ompi_op_gpu_cmd_queue_t by placing it
- * as the first member named "super".  The HIP stream and shutdown flag are
- * stored directly here rather than in a separate priv allocation.
- * Allocated with OBJ_NEW; the OBJ destructor chain releases GPU resources.
+ * as the first member named "super".  The HIP stream is stored directly
+ * here rather than in a separate priv allocation.  Allocated with OBJ_NEW;
+ * the OBJ destructor chain releases GPU resources.
  *
- * super.cmd and shutdown both live in plain device memory (hipMalloc) --
- * they're what the persistent kernel polls, so they need to be fast for the
- * GPU to access, not host-dereferenceable. host_cmd/host_shutdown are
- * registered (page-locked) host mirrors that the host writes/reads
- * directly; transfers between the host and device copies happen via
- * explicit hipMemcpyAsync on ctrl_stream. This avoids hipMallocManaged for
- * both slots: the cmd_queue pool (ompi_op_gpu_session.c) relaunches the
- * persistent kernel on every single collective call and kills it again at
- * session end, so shutdown sees the same host/device read-write ping-pong
- * on every call that cmd sees on every reduction -- managed memory would
- * fault on both.
+ * super.cmd lives in plain device memory (hipMalloc) -- it's what the
+ * persistent kernel polls, so it needs to be fast for the GPU to access,
+ * not host-dereferenceable. host_cmd is a registered (page-locked) host
+ * mirror that the host writes/reads directly; transfers between the two
+ * happen via explicit hipMemcpyAsync on ctrl_stream. This avoids
+ * hipMallocManaged: both sides touch this slot on every single reduction
+ * call, and that read/write ping-pong drives constant migration faults
+ * under managed memory.
+ *
+ * There is no separate shutdown flag: cmd->status doubles as the shutdown
+ * signal (a negative value requests it -- see op_rocm_kernels.cpp), so
+ * shutting down the kernel goes through the exact same host_cmd/ctrl_stream
+ * channel as posting a reduction, and the kernel resets status back to 0
+ * itself before exiting, leaving the slot idle and ready for the next
+ * launch without the host needing to push a reset.
  */
 typedef struct ompi_op_rocm_cmd_queue_t {
     ompi_op_gpu_cmd_queue_t  super;       /* MUST be first; super.cmd is device memory */
-    volatile int32_t        *shutdown;    /* device-resident shutdown flag, polled by the kernel */
     hipStream_t              stream;      /* private HIP stream running the persistent kernel */
     ompi_op_gpu_cmd_t       *host_cmd;    /* registered host mirror of super.cmd */
-    int32_t                 *host_shutdown; /* registered host mirror of shutdown */
     hipStream_t              ctrl_stream; /* dedicated stream for host<->device cmd transfers */
 } ompi_op_rocm_cmd_queue_t;
 OBJ_CLASS_DECLARATION(ompi_op_rocm_cmd_queue_t);
@@ -53,7 +55,6 @@ OBJ_CLASS_DECLARATION(ompi_op_rocm_cmd_queue_t);
  * Launches the persistent kernel for one (op, type) combination.
  */
 typedef void (*ompi_op_rocm_launcher_fn_t)(ompi_op_gpu_cmd_t *cmd,
-                                           volatile int32_t  *shutdown,
                                            hipStream_t        stream);
 
 /**

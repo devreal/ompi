@@ -22,28 +22,30 @@ BEGIN_C_DECLS
 
 /**
  * CUDA-specific cmd_queue.  Inherits ompi_op_gpu_cmd_queue_t by placing it
- * as the first member named "super".  The CUDA stream and shutdown flag are
- * stored directly here rather than in a separate priv allocation.
- * Allocated with OBJ_NEW; the OBJ destructor chain releases GPU resources.
+ * as the first member named "super".  The CUDA stream is stored directly
+ * here rather than in a separate priv allocation.  Allocated with OBJ_NEW;
+ * the OBJ destructor chain releases GPU resources.
  *
- * super.cmd and shutdown both live in plain device memory (cudaMalloc) --
- * they're what the persistent kernel polls, so they need to be fast for the
- * GPU to access, not host-dereferenceable. host_cmd/host_shutdown are
- * registered (page-locked) host mirrors that the host writes/reads
- * directly; transfers between the host and device copies happen via
- * explicit cudaMemcpyAsync on ctrl_stream. This avoids cudaMallocManaged
- * for both slots: the cmd_queue pool (ompi_op_gpu_session.c) relaunches the
- * persistent kernel on every single collective call and kills it again at
- * session end, so shutdown sees the same host/device read-write ping-pong
- * on every call that cmd sees on every reduction -- managed memory would
- * fault on both.
+ * super.cmd lives in plain device memory (cudaMalloc) -- it's what the
+ * persistent kernel polls, so it needs to be fast for the GPU to access,
+ * not host-dereferenceable. host_cmd is a registered (page-locked) host
+ * mirror that the host writes/reads directly; transfers between the two
+ * happen via explicit cudaMemcpyAsync on ctrl_stream. This avoids
+ * cudaMallocManaged: both sides touch this slot on every single reduction
+ * call, and that read/write ping-pong drives constant migration faults
+ * under Unified Memory.
+ *
+ * There is no separate shutdown flag: cmd->status doubles as the shutdown
+ * signal (a negative value requests it -- see op_cuda_kernels.cu), so
+ * shutting down the kernel goes through the exact same host_cmd/ctrl_stream
+ * channel as posting a reduction, and the kernel resets status back to 0
+ * itself before exiting, leaving the slot idle and ready for the next
+ * launch without the host needing to push a reset.
  */
 typedef struct ompi_op_cuda_cmd_queue_t {
     ompi_op_gpu_cmd_queue_t  super;       /* MUST be first; super.cmd is device memory */
-    volatile int32_t        *shutdown;    /* device-resident shutdown flag, polled by the kernel */
     cudaStream_t             stream;      /* private CUDA stream running the persistent kernel */
     ompi_op_gpu_cmd_t       *host_cmd;    /* registered host mirror of super.cmd */
-    int32_t                 *host_shutdown; /* registered host mirror of shutdown */
     cudaStream_t             ctrl_stream; /* dedicated stream for host<->device cmd transfers */
 } ompi_op_cuda_cmd_queue_t;
 OBJ_CLASS_DECLARATION(ompi_op_cuda_cmd_queue_t);
@@ -53,7 +55,6 @@ OBJ_CLASS_DECLARATION(ompi_op_cuda_cmd_queue_t);
  * Launches the persistent kernel for one (op, type) combination.
  */
 typedef void (*ompi_op_cuda_launcher_fn_t)(ompi_op_gpu_cmd_t *cmd,
-                                           volatile int32_t  *shutdown,
                                            cudaStream_t       stream);
 
 /**

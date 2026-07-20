@@ -80,6 +80,16 @@ OBJ_CLASS_DECLARATION(ompi_op_gpu_cmd_queue_t);
  *
  * When no GPU op component supports the (op, dtype) combination, begin()
  * returns NULL and all callers fall back to ompi_op_reduce().
+ *
+ * The persistent kernel itself is launched lazily: opc_session_begin only
+ * validates that a kernel exists for (op, dtype) and stashes what's needed
+ * to launch it in `launcher`; reduce_fn performs the actual launch on the
+ * first call, using `started` to track whether that's happened yet. Not
+ * every session ends up reducing anything -- e.g. leaf ranks in a
+ * reduction tree only ever forward data upward -- so this avoids paying
+ * persistent-kernel launch/teardown cost for sessions that turn out to do
+ * zero reductions. stop_fn checks `started` and is a no-op if the kernel
+ * was never launched.
  */
 typedef struct ompi_op_gpu_session_t {
     ompi_op_gpu_cmd_queue_t     *queue;
@@ -90,6 +100,8 @@ typedef struct ompi_op_gpu_session_t {
     /* Signal the persistent kernel to exit and synchronize the stream.
      * The cmd_queue's resources remain valid for reuse after this call. */
     void (*stop_fn)(struct ompi_op_gpu_session_t *session);
+    bool  started;   /* true once reduce_fn has actually launched the persistent kernel */
+    void *launcher;  /* component-owned resolved launcher fn pointer for the deferred launch */
 } ompi_op_gpu_session_t;
 
 /**
