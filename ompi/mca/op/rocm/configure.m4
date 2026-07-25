@@ -51,9 +51,15 @@ AC_DEFUN([MCA_ompi_op_rocm_CONFIG],[
       ])
 
     OPAL_SUMMARY_ADD([Accelerators], [ROCm operator support], [], [$op_rocm_happy])
-    # Default HIPCCFLAGS if not already set by the user.
+    # Default HIPCCFLAGS if not already set by the user.  Target whatever
+    # GPU(s) are installed on the build machine rather than hardcoding an
+    # architecture -- a fixed default (e.g. gfx906 for MI50/60) silently
+    # produces a code object missing the running GPU's arch (e.g. gfx90a
+    # for MI250X), which fails at kernel launch with "invalid device
+    # function" rather than at build time.  Mirrors -arch=native on the
+    # CUDA side (op/cuda/configure.m4).
     AS_IF([test "$op_rocm_happy" = "yes" && test "x$HIPCCFLAGS" = "x"],
-          [HIPCCFLAGS="--offload-arch=gfx906"])
+          [HIPCCFLAGS="--offload-arch=native"])
 
     AC_SUBST([op_rocm_CPPFLAGS])
     AC_SUBST([op_rocm_LDFLAGS])
