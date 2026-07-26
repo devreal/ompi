@@ -351,6 +351,20 @@ typedef struct ompi_op_gpu_session_t *
                                                struct ompi_datatype_t *dtype);
 
 /**
+ * Optional component hook: report the device's memory bandwidth and its
+ * host<->device link bandwidth (both in bytes/sec), used to analytically
+ * estimate a device-vs-host reduction crossover size. Returns OMPI_SUCCESS
+ * with both outputs set, or an error if either could not be determined
+ * (e.g. no accelerator present, or the link topology couldn't be queried) --
+ * callers must treat a non-success return as "estimate unavailable" and fall
+ * back to a fixed default rather than trusting partially-filled outputs.
+ */
+typedef int
+  (*ompi_op_base_component_query_bandwidth_fn_t)(int dev_id,
+                                                  double *device_bw_bytes_per_sec,
+                                                  double *link_bw_bytes_per_sec);
+
+/**
  * Op component interface.
  *
  * Component interface for the op framework.  A public instance of
@@ -371,6 +385,10 @@ typedef struct ompi_op_base_component_1_0_0_t {
     /** Optional: GPU cmd_queue and session hooks.  NULL in host-only components. */
     ompi_op_base_component_cmd_queue_alloc_fn_t  opc_cmd_queue_alloc;
     ompi_op_base_component_session_begin_fn_t    opc_session_begin;
+    /** Optional: device/link bandwidth query for threshold estimation. NULL
+     *  in host-only components (and may remain NULL in GPU components that
+     *  don't support it on a given platform). */
+    ompi_op_base_component_query_bandwidth_fn_t  opc_query_bandwidth;
 } ompi_op_base_component_1_0_0_t;
 
 

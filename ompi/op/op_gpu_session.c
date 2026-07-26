@@ -43,6 +43,7 @@
 #include "ompi_config.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "opal/class/opal_lifo.h"
 #include "opal/class/opal_list.h"
@@ -207,6 +208,98 @@ ompi_op_gpu_session_end(ompi_op_gpu_session_t *session)
     free(session);
 
     cmd_queue_pool_push(q);
+}
+
+/* --------------------------------------------------------------------------
+ * ompi_op_gpu_session_query_bandwidth
+ *
+ * Iterate loaded op components looking for one that can answer a bandwidth
+ * query for dev_id (mirrors the component-iteration in session_begin's pool
+ * miss path, but has no cmd_queue/session side effects -- just a lookup).
+ * -------------------------------------------------------------------------- */
+int
+ompi_op_gpu_session_query_bandwidth(int dev_id,
+                                    double *device_bw_bytes_per_sec,
+                                    double *link_bw_bytes_per_sec)
+{
+    mca_base_component_list_item_t *cli;
+    OPAL_LIST_FOREACH(cli, &ompi_op_base_framework.framework_components,
+                      mca_base_component_list_item_t) {
+        const mca_base_component_t *bc = cli->cli_component;
+
+        if (1 != bc->mca_type_major_version ||
+            0 != bc->mca_type_minor_version ||
+            0 != bc->mca_type_release_version) {
+            continue;
+        }
+
+        const ompi_op_base_component_1_0_0_t *opc =
+            (const ompi_op_base_component_1_0_0_t *) bc;
+
+        if (NULL == opc->opc_query_bandwidth) {
+            continue;
+        }
+
+        if (OMPI_SUCCESS == opc->opc_query_bandwidth(dev_id, device_bw_bytes_per_sec,
+                                                      link_bw_bytes_per_sec)) {
+            return OMPI_SUCCESS;
+        }
+    }
+
+    return OMPI_ERR_NOT_SUPPORTED;
+}
+
+/* --------------------------------------------------------------------------
+ * ompi_op_gpu_query_pcie_link_bandwidth
+ * -------------------------------------------------------------------------- */
+int
+ompi_op_gpu_query_pcie_link_bandwidth(int pci_domain, int pci_bus, int pci_device,
+                                      int pci_function, double *link_bw_bytes_per_sec)
+{
+    char path[256];
+    char buf[64];
+    FILE *f;
+    double gt_per_sec;
+    int width;
+
+    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%04x:%02x:%02x.%d/current_link_speed",
+             pci_domain, pci_bus, pci_device, pci_function);
+    f = fopen(path, "r");
+    if (NULL == f) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    if (NULL == fgets(buf, sizeof(buf), f)) {
+        fclose(f);
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    fclose(f);
+    /* Format is e.g. "16.0 GT/s PCIe". */
+    if (1 != sscanf(buf, "%lf", &gt_per_sec) || gt_per_sec <= 0.0) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+
+    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%04x:%02x:%02x.%d/current_link_width",
+             pci_domain, pci_bus, pci_device, pci_function);
+    f = fopen(path, "r");
+    if (NULL == f) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    if (NULL == fgets(buf, sizeof(buf), f)) {
+        fclose(f);
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    fclose(f);
+    if (1 != sscanf(buf, "%d", &width) || width <= 0) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+
+    /* Gen1 (2.5 GT/s) and Gen2 (5.0 GT/s) use 8b/10b line coding (80%
+     * efficient); Gen3+ (8.0 GT/s and up) use 128b/130b (~98.46% efficient). */
+    double efficiency = (gt_per_sec < 6.0) ? 0.80 : (128.0 / 130.0);
+    double bytes_per_sec_per_lane = (gt_per_sec * 1.0e9 / 8.0) * efficiency;
+
+    *link_bw_bytes_per_sec = bytes_per_sec_per_lane * (double) width;
+    return OMPI_SUCCESS;
 }
 
 /* --------------------------------------------------------------------------

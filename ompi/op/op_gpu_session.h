@@ -142,6 +142,37 @@ OMPI_DECLSPEC void ompi_op_gpu_session_pool_init(void);
  */
 OMPI_DECLSPEC void ompi_op_gpu_session_pool_finalize(void);
 
+/**
+ * Query dev_id's device memory bandwidth and host<->device link bandwidth
+ * (both in bytes/sec), by asking whichever loaded op component supports
+ * opc_query_bandwidth. Used to analytically estimate a device-vs-host
+ * reduction crossover size (see coll/tuned's gpu_reduce_threshold).
+ *
+ * Returns OMPI_SUCCESS with both outputs set, or OMPI_ERR_NOT_SUPPORTED if
+ * no loaded component could answer -- callers must fall back to a fixed
+ * default in that case rather than trusting the outputs.
+ */
+OMPI_DECLSPEC int ompi_op_gpu_session_query_bandwidth(int dev_id,
+                                                       double *device_bw_bytes_per_sec,
+                                                       double *link_bw_bytes_per_sec);
+
+/**
+ * Read a PCI device's current link speed/width from Linux sysfs
+ * (/sys/bus/pci/devices/<domain:bus:device.function>/current_link_{speed,width})
+ * and convert to an effective bytes/sec bandwidth estimate, accounting for
+ * PCIe line-code overhead (8b/10b for Gen1/2, 128b/130b for Gen3+). Shared by
+ * the CUDA and ROCm op components' opc_query_bandwidth implementations,
+ * since PCIe topology isn't vendor-specific.
+ *
+ * Returns OMPI_SUCCESS with *link_bw_bytes_per_sec set, or
+ * OMPI_ERR_NOT_SUPPORTED if the sysfs files couldn't be read (e.g. non-Linux
+ * host, sandboxed/restricted filesystem, or the device isn't behind a
+ * conventional PCIe link).
+ */
+OMPI_DECLSPEC int ompi_op_gpu_query_pcie_link_bandwidth(int pci_domain, int pci_bus,
+                                                        int pci_device, int pci_function,
+                                                        double *link_bw_bytes_per_sec);
+
 END_C_DECLS
 
 #endif /* OMPI_OP_GPU_SESSION_H */

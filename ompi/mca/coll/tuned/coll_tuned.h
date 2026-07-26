@@ -26,6 +26,8 @@
 #include "ompi/request/request.h"
 #include "ompi/mca/coll/base/coll_base_functions.h"
 #include "opal/util/output.h"
+#include "opal/mca/accelerator/accelerator.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "ompi/op/op_gpu_session.h"
 
 /* also need the dynamic rule structures */
@@ -48,6 +50,123 @@ extern int   ompi_coll_tuned_scatter_intermediate_msg;
 extern int   ompi_coll_tuned_scatter_large_msg;
 extern int   ompi_coll_tuned_scatter_min_procs;
 extern int   ompi_coll_tuned_scatter_blocking_send_ratio;
+
+/* Message size (bytes), below which a reduction on device-resident buffers
+ * is done by staging through host memory (plain CPU op) rather than driving
+ * the GPU op component's persistent kernel. Below the crossover, the
+ * host<->device control-slot round trip a persistent kernel needs (see
+ * ompi/op/op_gpu_session.h) is expected to cost more than just bouncing the
+ * (small) buffers to host and reducing them there; above it, avoiding a full
+ * buffer copy in each direction is expected to win. Default 0 preserves the
+ * original always-use-the-device behavior until an estimate is computed (see
+ * ompi_coll_tuned_gpu_get_threshold() in coll_tuned_gpu.c) or the user sets
+ * this explicitly, either of which takes precedence over the default. */
+extern size_t ompi_coll_tuned_gpu_reduce_threshold;
+/* mca_base_var index of the variable above -- used by
+ * ompi_coll_tuned_gpu_get_threshold() to tell whether the user explicitly
+ * set it (mca_base_var_get_value's source output) vs. it's still at the
+ * compiled-in default. */
+extern int ompi_coll_tuned_gpu_reduce_threshold_index;
+
+/* Analytical-estimate inputs -- see coll_tuned_gpu.c. */
+extern int ompi_coll_tuned_gpu_host_reduce_bw_mbs;
+extern int ompi_coll_tuned_gpu_ctrl_latency_usec;
+extern int ompi_coll_tuned_gpu_host_stage_latency_usec;
+
+/*
+ * Return the reduction device-vs-host threshold (bytes) to use for dev_id.
+ *
+ * If the user has explicitly set coll_tuned_gpu_reduce_threshold (via --mca,
+ * environment, or a file), that value always wins and is returned as-is,
+ * regardless of dev_id. Otherwise, this analytically estimates a crossover
+ * from dev_id's device/PCIe bandwidth (queried once per device and cached)
+ * and the gpu_host_reduce_bw_mbs/gpu_ctrl_latency_usec/
+ * gpu_host_stage_latency_usec tunables; if the bandwidth query isn't
+ * supported (e.g. no matching op component, or PCIe link info unavailable),
+ * falls back to the compiled-in default (0).
+ */
+size_t ompi_coll_tuned_gpu_get_threshold(int dev_id);
+
+/*
+ * COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, sbuf_bytes, rbuf_bytes,
+ *                              cmp_bytes, rc, do_this_call)
+ *
+ * Decides, for one reduction-based collective invocation, whether to run on
+ * the device or stage through the host, then performs whichever the
+ * decision calls for and invokes do_this_call exactly once. sbuf_bytes and
+ * rbuf_bytes may differ (e.g. reduce_scatter: sbuf holds the full
+ * pre-reduction array, rbuf only this rank's post-scatter slice); cmp_bytes
+ * is what gets compared against the threshold.
+ *
+ *   - sbuf/rbuf not device memory: unchanged from before this macro existed
+ *     -- do_this_call runs with the original pointers and session == NULL.
+ *   - device memory, cmp_bytes >= ompi_coll_tuned_gpu_reduce_threshold:
+ *     unchanged -- a GPU session is created (as today) and passed to
+ *     do_this_call via `session`.
+ *   - device memory, cmp_bytes < ompi_coll_tuned_gpu_reduce_threshold:
+ *     sbuf/rbuf are copied to host scratch buffers (sbuf_bytes/rbuf_bytes
+ *     each), do_this_call runs against those with session == NULL (so the
+ *     algorithm takes its normal host-op code path), and the result is
+ *     copied back into the caller's original (device) rbuf afterward.
+ *
+ * do_this_call must reference the buffers as `_sbuf`/`_rbuf` and the session
+ * as `session` -- both are bound by this macro in its scope. sbuf may be
+ * MPI_IN_PLACE.
+ *
+ * COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, total_bytes, rc, do_this_call)
+ * is the common case where sbuf and rbuf are the same total size (allreduce,
+ * reduce, scan, exscan).
+ */
+#define COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, sbuf_bytes, rbuf_bytes,             \
+                                      cmp_bytes, rc, do_this_call)                              \
+    do {                                                                                       \
+        ompi_op_gpu_session_t *session = NULL;                                                 \
+        int _cgd_dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;                                        \
+        uint64_t _cgd_flags;                                                                   \
+        bool _cgd_is_device =                                                                  \
+            (((sbuf) != MPI_IN_PLACE &&                                                        \
+              opal_accelerator.check_addr((sbuf), &_cgd_dev_id, &_cgd_flags) > 0) ||            \
+             opal_accelerator.check_addr((rbuf), &_cgd_dev_id, &_cgd_flags) > 0);               \
+        void *_cgd_hsbuf = NULL, *_cgd_hrbuf = NULL;                                            \
+        const void *_sbuf = (sbuf);                                                             \
+        void *_rbuf = (rbuf);                                                                   \
+        (rc) = OMPI_SUCCESS;                                                                    \
+        if (_cgd_is_device && (cmp_bytes) < ompi_coll_tuned_gpu_get_threshold(_cgd_dev_id)) {   \
+            _cgd_hrbuf = malloc(rbuf_bytes);                                                    \
+            if ((sbuf) != MPI_IN_PLACE) { _cgd_hsbuf = malloc(sbuf_bytes); }                    \
+            if (NULL == _cgd_hrbuf || ((sbuf) != MPI_IN_PLACE && NULL == _cgd_hsbuf)) {         \
+                (rc) = OMPI_ERR_OUT_OF_RESOURCE;                                                \
+            } else {                                                                            \
+                if (NULL != _cgd_hsbuf) {                                                       \
+                    opal_accelerator.mem_copy(MCA_ACCELERATOR_NO_DEVICE_ID, _cgd_dev_id,        \
+                                               _cgd_hsbuf, (sbuf), (sbuf_bytes),                \
+                                               MCA_ACCELERATOR_TRANSFER_DTOH);                  \
+                    _sbuf = _cgd_hsbuf;                                                         \
+                }                                                                               \
+                opal_accelerator.mem_copy(MCA_ACCELERATOR_NO_DEVICE_ID, _cgd_dev_id,            \
+                                           _cgd_hrbuf, (rbuf), (rbuf_bytes),                    \
+                                           MCA_ACCELERATOR_TRANSFER_DTOH);                      \
+                _rbuf = _cgd_hrbuf;                                                             \
+            }                                                                                   \
+        } else if (_cgd_is_device) {                                                            \
+            session = ompi_op_gpu_session_begin((op), (dtype), _cgd_dev_id);                    \
+        }                                                                                        \
+        if (OMPI_SUCCESS == (rc)) {                                                             \
+            (rc) = do_this_call;                                                                \
+            ompi_op_gpu_session_end(session);                                                   \
+            if (NULL != _cgd_hrbuf) {                                                           \
+                opal_accelerator.mem_copy(_cgd_dev_id, MCA_ACCELERATOR_NO_DEVICE_ID, (rbuf),     \
+                                           _cgd_hrbuf, (rbuf_bytes),                            \
+                                           MCA_ACCELERATOR_TRANSFER_HTOD);                      \
+            }                                                                                    \
+        }                                                                                        \
+        if (NULL != _cgd_hrbuf) { free(_cgd_hrbuf); }                                          \
+        if (NULL != _cgd_hsbuf) { free(_cgd_hsbuf); }                                          \
+    } while (0)
+
+#define COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, total_bytes, rc, do_this_call)           \
+    COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, total_bytes, total_bytes,               \
+                                  total_bytes, rc, do_this_call)
 
 /* forced algorithm choices */
 /* this structure is for storing the indexes to the forced algorithm mca params... */

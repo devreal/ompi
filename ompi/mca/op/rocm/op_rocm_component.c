@@ -27,6 +27,8 @@ static int rocm_component_init_query(bool enable_progress_threads,
                                       bool enable_mpi_thread_multiple);
 static struct ompi_op_base_module_1_0_0_t *
     rocm_component_op_query(struct ompi_op_t *op, int *priority);
+static int rocm_component_query_bandwidth(int dev_id, double *device_bw_bytes_per_sec,
+                                          double *link_bw_bytes_per_sec);
 
 /*
  * Public component descriptor.
@@ -51,6 +53,7 @@ ompi_op_base_component_1_0_0_t mca_op_rocm_component = {
     /* GPU session hooks */
     .opc_cmd_queue_alloc = ompi_op_rocm_cmd_queue_alloc,
     .opc_session_begin   = ompi_op_rocm_session_begin,
+    .opc_query_bandwidth = rocm_component_query_bandwidth,
 };
 MCA_BASE_COMPONENT_INIT(ompi, op, rocm)
 
@@ -93,4 +96,34 @@ rocm_component_op_query(struct ompi_op_t *op, int *priority)
     (void) op;
     (void) priority;
     return NULL;
+}
+
+/*
+ * Report dev_id's device memory bandwidth and its PCIe link bandwidth, used
+ * by coll/tuned to analytically estimate a device-vs-host reduction
+ * crossover size. Device bandwidth is derived from the memory clock/bus
+ * width reported by the driver (GDDR/HBM is double-data-rate: 2 transfers
+ * per clock); link bandwidth comes from the device's current PCIe link
+ * generation/width via sysfs. Infinity Fabric is not detected -- if the
+ * device sits behind Infinity Fabric rather than plain PCIe, this
+ * underestimates link bandwidth.
+ */
+static int
+rocm_component_query_bandwidth(int dev_id, double *device_bw_bytes_per_sec,
+                               double *link_bw_bytes_per_sec)
+{
+    hipDeviceProp_t prop;
+    hipError_t err = hipGetDeviceProperties(&prop, dev_id);
+    if (hipSuccess != err) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+
+    *device_bw_bytes_per_sec = 2.0 * ((double) prop.memoryClockRate * 1000.0)
+                               * ((double) prop.memoryBusWidth / 8.0);
+
+    /* Function 0 is the GPU's primary (compute/display) function; this
+     * assumption holds for the conventional single-GPU-per-slot case. */
+    return ompi_op_gpu_query_pcie_link_bandwidth(prop.pciDomainID, prop.pciBusID,
+                                                 prop.pciDeviceID, 0,
+                                                 link_bw_bytes_per_sec);
 }

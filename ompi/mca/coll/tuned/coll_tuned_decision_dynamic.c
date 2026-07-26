@@ -69,19 +69,16 @@ ompi_coll_tuned_allreduce_intra_dec_dynamic (const void *sbuf, void *rbuf, size_
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[ALLREDUCE].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_allreduce_intra_do_this(sbuf, rbuf, count, dtype, op, comm, module,
-                                                         tuned_module->user_forced[ALLREDUCE].algorithm,
-                                                         tuned_module->user_forced[ALLREDUCE].tree_fanout,
-                                                         tuned_module->user_forced[ALLREDUCE].segsize,
-                                                         session);
-        ompi_op_gpu_session_end(session);
+        size_t _dsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_dsize);
+        _dsize *= count;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _dsize, rc,
+            ompi_coll_tuned_allreduce_intra_do_this(_sbuf, _rbuf, count, dtype, op, comm, module,
+                                                    tuned_module->user_forced[ALLREDUCE].algorithm,
+                                                    tuned_module->user_forced[ALLREDUCE].tree_fanout,
+                                                    tuned_module->user_forced[ALLREDUCE].segsize,
+                                                    session));
         return rc;
     }
 
@@ -98,17 +95,11 @@ ompi_coll_tuned_allreduce_intra_dec_dynamic (const void *sbuf, void *rbuf, size_
                                                         dsize, &faninout, &segsize, &ignoreme);
 
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_allreduce_intra_do_this(sbuf, rbuf, count, dtype, op,
-                                                             comm, module,
-                                                             alg, faninout, segsize, session);
-            ompi_op_gpu_session_end(session);
+            int rc;
+            COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, dsize, rc,
+                ompi_coll_tuned_allreduce_intra_do_this(_sbuf, _rbuf, count, dtype, op,
+                                                        comm, module,
+                                                        alg, faninout, segsize, session));
             return rc;
         } /* found a method */
     } /*end if any com rules to check */
@@ -341,21 +332,18 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCE].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_reduce_intra_do_this(sbuf, rbuf, count, dtype,
-                                                      op, root, comm, module,
-                                                      tuned_module->user_forced[REDUCE].algorithm,
-                                                      tuned_module->user_forced[REDUCE].chain_fanout,
-                                                      tuned_module->user_forced[REDUCE].segsize,
-                                                      tuned_module->user_forced[REDUCE].max_requests,
-                                                      session);
-        ompi_op_gpu_session_end(session);
+        size_t _dsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_dsize);
+        _dsize *= count;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _dsize, rc,
+            ompi_coll_tuned_reduce_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                                 op, root, comm, module,
+                                                 tuned_module->user_forced[REDUCE].algorithm,
+                                                 tuned_module->user_forced[REDUCE].chain_fanout,
+                                                 tuned_module->user_forced[REDUCE].segsize,
+                                                 tuned_module->user_forced[REDUCE].max_requests,
+                                                 session));
         return rc;
     }
 
@@ -373,18 +361,12 @@ int ompi_coll_tuned_reduce_intra_dec_dynamic( const void *sbuf, void *rbuf,
                                                         dsize, &faninout, &segsize, &max_requests);
 
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_reduce_intra_do_this(sbuf, rbuf, count, dtype,
-                                                          op, root, comm, module,
-                                                          alg, faninout,
-                                                          segsize, max_requests, session);
-            ompi_op_gpu_session_end(session);
+            int rc;
+            COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, dsize, rc,
+                ompi_coll_tuned_reduce_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                                     op, root, comm, module,
+                                                     alg, faninout,
+                                                     segsize, max_requests, session));
             return rc;
         } /* found a method */
     } /*end if any com rules to check */
@@ -416,20 +398,23 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_dynamic(const void *sbuf, void *rbu
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTER].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
+        size_t _dsize, _sbuf_dsize, _rbuf_dsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_dsize);
+        _sbuf_dsize = 0;
+        {
+            int _i, _size = ompi_comm_size(comm);
+            for (_i = 0; _i < _size; _i++) { _sbuf_dsize += ompi_count_array_get(rcounts, _i); }
         }
-        int rc = ompi_coll_tuned_reduce_scatter_intra_do_this(sbuf, rbuf, rcounts, dtype,
-                                                              op, comm, module,
-                                                              tuned_module->user_forced[REDUCESCATTER].algorithm,
-                                                              tuned_module->user_forced[REDUCESCATTER].chain_fanout,
-                                                              tuned_module->user_forced[REDUCESCATTER].segsize,
-                                                              session);
-        ompi_op_gpu_session_end(session);
+        _rbuf_dsize = _dsize * ompi_count_array_get(rcounts, ompi_comm_rank(comm));
+        _sbuf_dsize *= _dsize;
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, _sbuf_dsize, _rbuf_dsize, _sbuf_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_intra_do_this(_sbuf, _rbuf, rcounts, dtype,
+                                                         op, comm, module,
+                                                         tuned_module->user_forced[REDUCESCATTER].algorithm,
+                                                         tuned_module->user_forced[REDUCESCATTER].chain_fanout,
+                                                         tuned_module->user_forced[REDUCESCATTER].segsize,
+                                                         session));
         return rc;
     }
 
@@ -438,27 +423,22 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_dynamic(const void *sbuf, void *rbu
         /* we do, so calc the message size or what ever we need and use
            this for the evaluation */
         int alg, faninout, segsize, ignoreme, i, count, size;
-        size_t dsize;
+        size_t dsize, elemsize;
         size = ompi_comm_size(comm);
         for (i = 0, count = 0; i < size; i++) { count += ompi_count_array_get(rcounts, i);}
-        ompi_datatype_type_size (dtype, &dsize);
-        dsize *= count;
+        ompi_datatype_type_size (dtype, &elemsize);
+        dsize = elemsize * count;
 
         alg = ompi_coll_tuned_get_target_method_params (tuned_module->com_rules[REDUCESCATTER],
                                                         dsize, &faninout,
                                                         &segsize, &ignoreme);
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_reduce_scatter_intra_do_this(sbuf, rbuf, rcounts, dtype,
-                                                                  op, comm, module,
-                                                                  alg, faninout, segsize, session);
-            ompi_op_gpu_session_end(session);
+            size_t _rbuf_dsize = elemsize * ompi_count_array_get(rcounts, ompi_comm_rank(comm));
+            int rc;
+            COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, dsize, _rbuf_dsize, dsize, rc,
+                ompi_coll_tuned_reduce_scatter_intra_do_this(_sbuf, _rbuf, rcounts, dtype,
+                                                             op, comm, module,
+                                                             alg, faninout, segsize, session));
             return rc;
         } /* found a method */
     } /*end if any com rules to check */
@@ -490,20 +470,18 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_dynamic(const void *sbuf, voi
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_reduce_scatter_block_intra_do_this(sbuf, rbuf, rcount, dtype,
-                                                                    op, comm, module,
-                                                                    tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm,
-                                                                    tuned_module->user_forced[REDUCESCATTERBLOCK].chain_fanout,
-                                                                    tuned_module->user_forced[REDUCESCATTERBLOCK].segsize,
-                                                                    session);
-        ompi_op_gpu_session_end(session);
+        size_t _elemsize, _rbuf_dsize, _sbuf_dsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_elemsize);
+        _rbuf_dsize = _elemsize * rcount;
+        _sbuf_dsize = _rbuf_dsize * (size_t)ompi_comm_size(comm);
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, _sbuf_dsize, _rbuf_dsize, _sbuf_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_block_intra_do_this(_sbuf, _rbuf, rcount, dtype,
+                                                               op, comm, module,
+                                                               tuned_module->user_forced[REDUCESCATTERBLOCK].algorithm,
+                                                               tuned_module->user_forced[REDUCESCATTERBLOCK].chain_fanout,
+                                                               tuned_module->user_forced[REDUCESCATTERBLOCK].segsize,
+                                                               session));
         return rc;
     }
 
@@ -512,26 +490,21 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_dynamic(const void *sbuf, voi
         /* we do, so calc the message size or what ever we need and use
            this for the evaluation */
         int alg, faninout, segsize, ignoreme, size;
-        size_t dsize;
+        size_t dsize, elemsize;
         size = ompi_comm_size(comm);
-        ompi_datatype_type_size (dtype, &dsize);
-        dsize *= rcount * size;
+        ompi_datatype_type_size (dtype, &elemsize);
+        dsize = elemsize * rcount * size;
 
         alg = ompi_coll_tuned_get_target_method_params(tuned_module->com_rules[REDUCESCATTERBLOCK],
                                                        dsize, &faninout,
                                                        &segsize, &ignoreme);
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_reduce_scatter_block_intra_do_this(sbuf, rbuf, rcount, dtype,
-                                                                        op, comm, module,
-                                                                        alg, faninout, segsize, session);
-            ompi_op_gpu_session_end(session);
+            size_t _rbuf_dsize = elemsize * rcount;
+            int rc;
+            COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, dsize, _rbuf_dsize, dsize, rc,
+                ompi_coll_tuned_reduce_scatter_block_intra_do_this(_sbuf, _rbuf, rcount, dtype,
+                                                                   op, comm, module,
+                                                                   alg, faninout, segsize, session));
             return rc;
         } /* found a method */
     } /* end if any com rules to check */
@@ -823,18 +796,15 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[EXSCAN].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_exscan_intra_do_this(sbuf, rbuf, count, dtype,
-                                                      op, comm, module,
-                                                      tuned_module->user_forced[EXSCAN].algorithm,
-                                                      session);
-        ompi_op_gpu_session_end(session);
+        size_t _bufsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_bufsize);
+        _bufsize *= count;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _bufsize, rc,
+            ompi_coll_tuned_exscan_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                                 op, comm, module,
+                                                 tuned_module->user_forced[EXSCAN].algorithm,
+                                                 session));
         return rc;
     }
 
@@ -853,17 +823,14 @@ int ompi_coll_tuned_exscan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_
                                                         dsize, &faninout, &segsize, &max_requests);
 
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_exscan_intra_do_this(sbuf, rbuf, count, dtype,
-                                                          op, comm, module,
-                                                          alg, session);
-            ompi_op_gpu_session_end(session);
+            size_t _bufsize;
+            int rc;
+            ompi_datatype_type_size(dtype, &_bufsize);
+            _bufsize *= count;
+            COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _bufsize, rc,
+                ompi_coll_tuned_exscan_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                                     op, comm, module,
+                                                     alg, session));
             return rc;
         } /* found a method */
     } /*end if any com rules to check */
@@ -885,18 +852,15 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
 
     /* Check first if an algorithm is set explicitly for this collective */
     if (tuned_module->user_forced[SCAN].algorithm) {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_scan_intra_do_this(sbuf, rbuf, count, dtype,
-                                                    op, comm, module,
-                                                    tuned_module->user_forced[SCAN].algorithm,
-                                                    session);
-        ompi_op_gpu_session_end(session);
+        size_t _bufsize;
+        int rc;
+        ompi_datatype_type_size(dtype, &_bufsize);
+        _bufsize *= count;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _bufsize, rc,
+            ompi_coll_tuned_scan_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                               op, comm, module,
+                                               tuned_module->user_forced[SCAN].algorithm,
+                                               session));
         return rc;
     }
 
@@ -915,17 +879,14 @@ int ompi_coll_tuned_scan_intra_dec_dynamic(const void *sbuf, void* rbuf, size_t 
                                                         dsize, &faninout, &segsize, &max_requests);
 
         if (alg) {
-            ompi_op_gpu_session_t *session = NULL;
-            int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-            uint64_t _flags;
-            if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-                opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-                session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-            }
-            int rc = ompi_coll_tuned_scan_intra_do_this(sbuf, rbuf, count, dtype,
-                                                        op, comm, module,
-                                                        alg, session);
-            ompi_op_gpu_session_end(session);
+            size_t _bufsize;
+            int rc;
+            ompi_datatype_type_size(dtype, &_bufsize);
+            _bufsize *= count;
+            COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, _bufsize, rc,
+                ompi_coll_tuned_scan_intra_do_this(_sbuf, _rbuf, count, dtype,
+                                                   op, comm, module,
+                                                   alg, session));
             return rc;
         } /* found a method */
     } /*end if any com rules to check */

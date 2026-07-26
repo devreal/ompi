@@ -59,6 +59,17 @@ int   ompi_coll_tuned_init_tree_fanout = 4;
 int   ompi_coll_tuned_init_chain_fanout = 4;
 int   ompi_coll_tuned_init_max_requests = 128;
 int   ompi_coll_tuned_verbose = 0;
+size_t ompi_coll_tuned_gpu_reduce_threshold = 0;
+int ompi_coll_tuned_gpu_reduce_threshold_index = -1;
+
+/* Analytical-estimate inputs for the threshold above -- see
+ * ompi_coll_tuned_gpu_get_threshold() in coll_tuned_gpu.c. None of these are
+ * derivable from queryable system/device info, so they're exposed as
+ * separate tunables with conservative defaults rather than baked-in
+ * constants. */
+int ompi_coll_tuned_gpu_host_reduce_bw_mbs = 8000;
+int ompi_coll_tuned_gpu_ctrl_latency_usec = 5;
+int ompi_coll_tuned_gpu_host_stage_latency_usec = 10;
 
 /* Set it to the same value as intermediate msg by default, so it does not affect
  * default algorithm selection. Changing this value will force using linear with
@@ -204,6 +215,55 @@ static int tuned_register(void)
                                            OPAL_INFO_LVL_9,
                                            MCA_BASE_VAR_SCOPE_ALL,
                                            &ompi_coll_tuned_verbose);
+
+    ompi_coll_tuned_gpu_reduce_threshold = 0;
+    ompi_coll_tuned_gpu_reduce_threshold_index =
+        mca_base_component_var_register(&mca_coll_tuned_component.super.collm_version,
+                                        "gpu_reduce_threshold",
+                                        "Message size (bytes) below which a reduction on device-resident "
+                                        "buffers is staged through host memory and reduced there instead of "
+                                        "driving the GPU op component's persistent kernel. Left at its "
+                                        "default, this is auto-estimated per device at first use from device "
+                                        "and PCIe bandwidth (see gpu_host_reduce_bw_mbs, gpu_ctrl_latency_usec, "
+                                        "gpu_host_stage_latency_usec); set explicitly to override the estimate.",
+                                        MCA_BASE_VAR_TYPE_SIZE_T, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
+                                        OPAL_INFO_LVL_6,
+                                        MCA_BASE_VAR_SCOPE_ALL,
+                                        &ompi_coll_tuned_gpu_reduce_threshold);
+
+    ompi_coll_tuned_gpu_host_reduce_bw_mbs = 8000;
+    (void) mca_base_component_var_register(&mca_coll_tuned_component.super.collm_version,
+                                           "gpu_host_reduce_bw_mbs",
+                                           "Assumed single-thread host CPU reduction throughput (MB/s), used "
+                                           "only for the gpu_reduce_threshold analytical estimate. Not derivable "
+                                           "from queryable system info -- adjust if the estimate seems off.",
+                                           MCA_BASE_VAR_TYPE_INT, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
+                                           OPAL_INFO_LVL_9,
+                                           MCA_BASE_VAR_SCOPE_ALL,
+                                           &ompi_coll_tuned_gpu_host_reduce_bw_mbs);
+
+    ompi_coll_tuned_gpu_ctrl_latency_usec = 5;
+    (void) mca_base_component_var_register(&mca_coll_tuned_component.super.collm_version,
+                                           "gpu_ctrl_latency_usec",
+                                           "Assumed fixed round-trip latency (microseconds) of posting a "
+                                           "command to the GPU op component's persistent kernel and observing "
+                                           "completion, used only for the gpu_reduce_threshold analytical "
+                                           "estimate.",
+                                           MCA_BASE_VAR_TYPE_INT, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
+                                           OPAL_INFO_LVL_9,
+                                           MCA_BASE_VAR_SCOPE_ALL,
+                                           &ompi_coll_tuned_gpu_ctrl_latency_usec);
+
+    ompi_coll_tuned_gpu_host_stage_latency_usec = 10;
+    (void) mca_base_component_var_register(&mca_coll_tuned_component.super.collm_version,
+                                           "gpu_host_stage_latency_usec",
+                                           "Assumed fixed latency (microseconds) of the device<->host memcpy "
+                                           "pair used to stage a reduction through host memory, used only for "
+                                           "the gpu_reduce_threshold analytical estimate.",
+                                           MCA_BASE_VAR_TYPE_INT, NULL, 0, MCA_BASE_VAR_FLAG_SETTABLE,
+                                           OPAL_INFO_LVL_9,
+                                           MCA_BASE_VAR_SCOPE_ALL,
+                                           &ompi_coll_tuned_gpu_host_stage_latency_usec);
 
     /* register forced params */
     ompi_coll_tuned_allreduce_intra_check_forced_init(&ompi_coll_tuned_forced_params[ALLREDUCE]);

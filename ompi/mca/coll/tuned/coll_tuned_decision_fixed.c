@@ -218,16 +218,10 @@ ompi_coll_tuned_allreduce_intra_dec_fixed(const void *sbuf, void *rbuf, size_t c
     }
 
     {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_allreduce_intra_do_this(sbuf, rbuf, count, dtype, op,
-                                                         comm, module, alg, 0, 0, session);
-        ompi_op_gpu_session_end(session);
+        int rc;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, total_dsize, rc,
+            ompi_coll_tuned_allreduce_intra_do_this(_sbuf, _rbuf, count, dtype, op,
+                                                    comm, module, alg, 0, 0, session));
         return rc;
     }
 }
@@ -1088,18 +1082,12 @@ int ompi_coll_tuned_reduce_intra_dec_fixed( const void *sendbuf, void *recvbuf,
     }
 
     {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sendbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sendbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(recvbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, datatype, _dev_id);
-        }
         int faninout = 2;
-        int rc = ompi_coll_tuned_reduce_intra_do_this(sendbuf, recvbuf, count, datatype,
-                                                      op, root, comm, module,
-                                                      alg, faninout, 0, 0, session);
-        ompi_op_gpu_session_end(session);
+        int rc;
+        COLL_TUNED_GPU_DISPATCH(op, datatype, sendbuf, recvbuf, total_dsize, rc,
+            ompi_coll_tuned_reduce_intra_do_this(_sbuf, _rbuf, count, datatype,
+                                                 op, root, comm, module,
+                                                 alg, faninout, 0, 0, session));
         return rc;
     }
 }
@@ -1249,17 +1237,12 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_fixed( const void *sbuf, void *rbuf
     }
 
     {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_reduce_scatter_intra_do_this(sbuf, rbuf, rcounts, dtype,
-                                                              op, comm, module,
-                                                              alg, 0, 0, session);
-        ompi_op_gpu_session_end(session);
+        size_t _rbuf_dsize = dsize * ompi_count_array_get(rcounts, ompi_comm_rank(comm));
+        int rc;
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, total_dsize, _rbuf_dsize, total_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_intra_do_this(_sbuf, _rbuf, rcounts, dtype,
+                                                         op, comm, module,
+                                                         alg, 0, 0, session));
         return rc;
     }
 }
@@ -1381,17 +1364,12 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(const void *sbuf, void 
     }
 
     {
-        ompi_op_gpu_session_t *session = NULL;
-        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
-        uint64_t _flags;
-        if ((sbuf != MPI_IN_PLACE && opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
-            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
-            session = ompi_op_gpu_session_begin(op, dtype, _dev_id);
-        }
-        int rc = ompi_coll_tuned_reduce_scatter_block_intra_do_this(sbuf, rbuf, rcount, dtype,
-                                                                    op, comm, module,
-                                                                    alg, 0, 0, session);
-        ompi_op_gpu_session_end(session);
+        size_t _sbuf_dsize = total_dsize * (size_t)communicator_size;
+        int rc;
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, _sbuf_dsize, total_dsize, total_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_block_intra_do_this(_sbuf, _rbuf, rcount, dtype,
+                                                               op, comm, module,
+                                                               alg, 0, 0, session));
         return rc;
     }
 }
