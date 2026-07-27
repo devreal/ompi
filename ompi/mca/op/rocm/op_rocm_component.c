@@ -60,7 +60,6 @@ MCA_BASE_COMPONENT_INIT(ompi, op, rocm)
 static int
 rocm_component_open(void)
 {
-    ompi_op_rocm_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 
@@ -83,6 +82,8 @@ rocm_component_init_query(bool enable_progress_threads,
     if (hipSuccess != err || device_count <= 0) {
         return OMPI_ERR_NOT_SUPPORTED;
     }
+    // called here because component_open() is never called
+    ompi_op_rocm_kernel_fns_init();
     return OMPI_SUCCESS;
 }
 
