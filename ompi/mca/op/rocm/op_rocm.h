@@ -52,10 +52,15 @@ OBJ_CLASS_DECLARATION(ompi_op_rocm_cmd_queue_t);
 
 /**
  * Host-side launcher function type.
- * Launches the persistent kernel for one (op, type) combination.
+ * Launches the persistent kernel for one (op, type) combination across
+ * however many blocks the device can run concurrently (see
+ * op_rocm_kernels.hip) -- dev_id is needed to query that occupancy and to
+ * check the device's cooperative-launch capability, since the kernel body
+ * uses cooperative-groups grid.sync() to coordinate across blocks.
  */
 typedef void (*ompi_op_rocm_launcher_fn_t)(ompi_op_gpu_cmd_t *cmd,
-                                           hipStream_t        stream);
+                                           hipStream_t        stream,
+                                           int                dev_id);
 
 /**
  * 2D table [op_index][type_index] of launcher functions.

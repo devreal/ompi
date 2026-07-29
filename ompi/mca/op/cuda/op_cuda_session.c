@@ -263,7 +263,7 @@ ompi_op_cuda_session_reduce(ompi_op_gpu_session_t *session,
          * upward), so deferring the launch to here avoids paying
          * persistent-kernel launch/teardown cost for those. */
         ompi_op_cuda_launcher_fn_t launcher = (ompi_op_cuda_launcher_fn_t) session->launcher;
-        launcher(dev_cmd, cq->stream);
+        launcher(dev_cmd, cq->stream, cq->super.dev_id);
         cudaError_t err = cudaGetLastError();
         if (cudaSuccess != err) {
             /* session_begin already validated that a kernel exists for this

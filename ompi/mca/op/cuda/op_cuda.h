@@ -52,10 +52,15 @@ OBJ_CLASS_DECLARATION(ompi_op_cuda_cmd_queue_t);
 
 /**
  * Host-side launcher function type.
- * Launches the persistent kernel for one (op, type) combination.
+ * Launches the persistent kernel for one (op, type) combination across
+ * however many blocks the device can run concurrently (see
+ * op_cuda_kernels.cu) -- dev_id is needed to query that occupancy and to
+ * check the device's cooperative-launch capability, since the kernel body
+ * uses cooperative-groups grid.sync() to coordinate across blocks.
  */
 typedef void (*ompi_op_cuda_launcher_fn_t)(ompi_op_gpu_cmd_t *cmd,
-                                           cudaStream_t       stream);
+                                           cudaStream_t       stream,
+                                           int                dev_id);
 
 /**
  * 2D table [op_index][type_index] of launcher functions.

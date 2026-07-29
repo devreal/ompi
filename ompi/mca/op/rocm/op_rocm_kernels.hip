@@ -13,38 +13,58 @@
  * Persistent reduction kernels for the ROCm op component.
  *
  * Structure mirrors op_cuda_kernels.cu; differences from the CUDA version:
- *   - #include <hip/hip_runtime.h> instead of <cuda_runtime.h>
+ *   - #include <hip/hip_runtime.h> and <hip/hip_cooperative_groups.h>
+ *     instead of <cuda_runtime.h>/<cooperative_groups.h>
  *   - __builtin_amdgcn_s_sleep(1) replaces __nanosleep(1000) for the
  *     low-power spin-wait (GCN instruction; ~64 clock sleep)
  *   - All cuda* API calls replaced by their hip* equivalents
  *   - Launcher macro uses ompi_op_rocm_persistent_* prefix
  *
+ * Each kernel runs across however many blocks of 1024 threads the device
+ * can run concurrently (see ompi_op_rocm_compute_coop_grid_size() below),
+ * cooperating via cooperative-groups grid.sync() rather than a single
+ * block's __syncthreads(), so large reductions can use the whole device
+ * instead of a single CU's worth of bandwidth. Because grid.sync() requires
+ * the kernel to have been launched through the cooperative-launch API on a
+ * device that supports it -- true regardless of block count -- the launcher
+ * below always goes through hipLaunchCooperativeKernel and treats a device
+ * lacking that capability as fatal (see the launcher comment); there is no
+ * plain <<<>>> fallback path for this kernel body.
+ *
  * There is no separate shutdown flag: status < 0 is the shutdown sentinel,
  * posted through the exact same channel as a normal command. Every thread
- * polls cmd->status independently (sleeping between polls, as before), but
- * a __syncthreads() right after that poll loop -- before anyone acts on
- * what they saw -- is required for correctness, not just efficiency: on
- * shutdown, thread 0 resets status back to 0 (see below) so the slot is
- * idle for the next launch. Without the barrier, thread 0 could perform
- * that reset while a slower thread is still inside its own poll loop; that
- * thread would then observe the fresh 0 instead of the sentinel it needed
- * to see to break out, and spin forever waiting for a status update that
- * will never come -- hanging the whole block, and thus session_stop's
- * hipStreamSynchronize. The barrier guarantees every thread has already
- * exited its poll loop (having observed the same nonzero value -- nothing
- * else writes status in the window between that and the branch below) by
- * the time any thread performs the reset.
+ * in every block polls cmd->status independently (sleeping between polls,
+ * as before), but a grid.sync() right after that poll loop -- before anyone
+ * acts on what they saw -- is required for correctness, not just
+ * efficiency: on shutdown, one elected thread resets status back to 0 (see
+ * below) so the slot is idle for the next launch. Without the barrier, that
+ * thread could perform the reset while a slower thread elsewhere in the
+ * grid is still inside its own poll loop; that thread would then observe
+ * the fresh 0 instead of the sentinel it needed to see to break out, and
+ * spin forever waiting for a status update that will never come -- hanging
+ * the whole grid, and thus session_stop's hipStreamSynchronize. The barrier
+ * guarantees every thread in every block has already exited its poll loop
+ * (having observed the same nonzero value -- nothing else writes status in
+ * the window between that and the branch below) by the time the elected
+ * thread performs the reset. grid.sync() is also a full memory fence across
+ * the grid, same as __syncthreads() is within a block, so the reduction's
+ * own two barriers below need no additional fencing beyond it.
  *
- * On shutdown, thread 0 resets status back to 0 (idle) itself before the
- * kernel returns, so the device slot is already ready for the next launch
- * without the host ever needing to push a reset.
+ * On shutdown, the elected thread (block 0, thread 0) resets status back to
+ * 0 (idle) itself before the kernel returns, so the device slot is already
+ * ready for the next launch without the host ever needing to push a reset.
  */
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <hip/hip_runtime.h>
+#include <hip/hip_cooperative_groups.h>
 
+#include "opal/util/output.h"
 #include "ompi/mca/op/op.h"
 #include "ompi/mca/op/rocm/op_rocm.h"
+
+namespace cg = cooperative_groups;
 
 /* -------------------------------------------------------------------------
  * PERSISTENT_KERNEL(name, ctype, op_expr)
@@ -56,6 +76,8 @@
 #define PERSISTENT_KERNEL(kname, ctype, op_expr)                               \
 __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         \
 {                                                                               \
+    cg::grid_group grid = cg::this_grid();                                     \
+    bool elected = (0 == blockIdx.x && 0 == threadIdx.x);                      \
     while (1) {                                                                \
         /* Spin-wait for a new command or a shutdown request; sleep ~64       \
          * clocks between polls to save power. status == 2 means the         \
@@ -66,25 +88,27 @@ __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         
         while (cmd->status != 1 && cmd->status >= 0) {                        \
             __builtin_amdgcn_s_sleep(1);                                       \
         }                                                                       \
-        /* Every thread has now individually exited its poll loop above --    \
-         * required before anyone acts on the shutdown branch below; see      \
-         * the file comment for why. */                                        \
-        __syncthreads();                                                        \
+        /* Every thread in every block has now individually exited its       \
+         * poll loop above -- required before anyone acts on the shutdown    \
+         * branch below; see the file comment for why. */                     \
+        grid.sync();                                                           \
         if (cmd->status < 0) {                                                 \
             /* Leave the slot idle (status == 0) for the next launch -- the   \
              * host never needs to push a reset. */                            \
-            if (threadIdx.x == 0) { cmd->status = 0; }                        \
+            if (elected) { cmd->status = 0; }                                 \
             break;                                                             \
         }                                                                      \
         const ctype * __restrict__ src1 = (const ctype *) cmd->src1;           \
         const ctype * __restrict__ src2 = (const ctype *) cmd->src2;           \
               ctype * __restrict__ dst  = (      ctype *) cmd->dst;            \
         int64_t n = cmd->count;                                                 \
-        for (int64_t i = (int64_t)threadIdx.x; i < n; i += blockDim.x) {      \
+        int64_t grid_stride = (int64_t) blockDim.x * (int64_t) gridDim.x;      \
+        for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;      \
+             i < n; i += grid_stride) {                                        \
             op_expr;                                                            \
         }                                                                       \
-        __syncthreads();                                                        \
-        if (threadIdx.x == 0) {                                                 \
+        grid.sync();                                                            \
+        if (elected) {                                                          \
             __threadfence_system();   /* ensure dst writes reach host */        \
             cmd->status = 2;          /* signal done */                         \
         }                                                                       \
@@ -174,13 +198,84 @@ PERSISTENT_KERNEL(bxor_int64,  int64_t,  dst[i] = src1[i] ^ src2[i])
 PERSISTENT_KERNEL(bxor_uint64, uint64_t, dst[i] = src1[i] ^ src2[i])
 
 /* =========================================================================
- * Host-side launcher wrappers — one per kernel, 1 block × 256 threads.
+ * ompi_op_rocm_compute_coop_grid_size
+ *
+ * Number of 1024-thread blocks kernel_fn can run concurrently on dev_id,
+ * i.e. hipOccupancyMaxActiveBlocksPerMultiprocessor(...) * CU count -- the
+ * most blocks this persistent kernel can ever run without some of them
+ * waiting for a CU slot that will never free up (every block spins forever
+ * until shutdown, so under-occupancy here is not a transient slowdown, it's
+ * a permanent deadlock at launch).
+ *
+ * grid.sync() requires the kernel to run under the cooperative-launch API
+ * on a device that supports it, regardless of block count, so this also
+ * checks hipDeviceAttributeCooperativeLaunch. There is no plausible
+ * degraded behavior for this kernel body on a device where either query
+ * fails -- treated as fatal, same as a launch failure already is in
+ * ompi_op_rocm_session_reduce().
+ * ========================================================================= */
+static int
+ompi_op_rocm_compute_coop_grid_size(const void *kernel_fn, int dev_id, int block_size)
+{
+    int supports_coop = 0;
+    hipError_t err = hipDeviceGetAttribute(&supports_coop, hipDeviceAttributeCooperativeLaunch,
+                                           dev_id);
+    if (hipSuccess != err || 0 == supports_coop) {
+        opal_output(0, "op/rocm: device %d does not support cooperative kernel "
+                   "launch, required for the multi-block persistent reduction "
+                   "kernel", dev_id);
+        abort();
+    }
+
+    int cu_count = 0;
+    err = hipDeviceGetAttribute(&cu_count, hipDeviceAttributeMultiprocessorCount, dev_id);
+    if (hipSuccess != err || cu_count <= 0) {
+        opal_output(0, "op/rocm: failed to query CU count on device %d: %s",
+                   dev_id, hipGetErrorString(err));
+        abort();
+    }
+
+    int blocks_per_cu = 0;
+    err = hipOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_cu, kernel_fn,
+                                                       block_size, 0);
+    if (hipSuccess != err || blocks_per_cu <= 0) {
+        opal_output(0, "op/rocm: failed to query kernel occupancy on device %d: %s",
+                   dev_id, hipGetErrorString(err));
+        abort();
+    }
+
+    return blocks_per_cu * cu_count;
+}
+
+/* Devices per node this process could plausibly see; only used to size a
+ * per-launcher occupancy cache indexed by dev_id -- a dev_id outside this
+ * range just isn't cached (recomputed each call, which is correct, only
+ * slower). */
+#define OMPI_OP_ROCM_MAX_DEVICES 64
+
+/* =========================================================================
+ * Host-side launcher wrappers — one per kernel, occupancy-sized grid of
+ * 1024-thread blocks, launched cooperatively so the kernel body can use
+ * grid.sync() to coordinate across blocks.
  * ========================================================================= */
 #define LAUNCHER(kname)                                                        \
 static void launch_##kname(ompi_op_gpu_cmd_t *cmd,                            \
-                            hipStream_t        stream)                         \
+                            hipStream_t        stream,                         \
+                            int                dev_id)                        \
 {                                                                               \
-    ompi_op_rocm_persistent_##kname<<<1, 256, 0, stream>>>(cmd);              \
+    static int cached_blocks[OMPI_OP_ROCM_MAX_DEVICES];                       \
+    int blocks = (dev_id >= 0 && dev_id < OMPI_OP_ROCM_MAX_DEVICES)            \
+                 ? cached_blocks[dev_id] : 0;                                   \
+    if (0 == blocks) {                                                          \
+        blocks = ompi_op_rocm_compute_coop_grid_size(                         \
+            (const void *) ompi_op_rocm_persistent_##kname, dev_id, 1024);     \
+        if (dev_id >= 0 && dev_id < OMPI_OP_ROCM_MAX_DEVICES) {                \
+            cached_blocks[dev_id] = blocks;                                    \
+        }                                                                       \
+    }                                                                            \
+    void *args[] = { (void *) &cmd };                                            \
+    hipLaunchCooperativeKernel((void *) ompi_op_rocm_persistent_##kname,        \
+                               dim3(blocks), dim3(1024), args, 0, stream);      \
 }
 
 LAUNCHER(max_int8)    LAUNCHER(max_uint8)
