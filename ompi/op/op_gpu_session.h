@@ -37,7 +37,7 @@ typedef struct {
     const void      *src2;
     void            *dst;
     int64_t          count;
-    volatile int32_t status;
+    int32_t          status;
 } ompi_op_gpu_cmd_t;
 
 /**

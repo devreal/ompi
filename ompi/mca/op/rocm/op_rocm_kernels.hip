@@ -32,23 +32,44 @@
  * plain <<<>>> fallback path for this kernel body.
  *
  * There is no separate shutdown flag: status < 0 is the shutdown sentinel,
- * posted through the exact same channel as a normal command. Every thread
- * in every block polls cmd->status independently (sleeping between polls,
- * as before), but a grid.sync() right after that poll loop -- before anyone
- * acts on what they saw -- is required for correctness, not just
- * efficiency: on shutdown, one elected thread resets status back to 0 (see
- * below) so the slot is idle for the next launch. Without the barrier, that
- * thread could perform the reset while a slower thread elsewhere in the
- * grid is still inside its own poll loop; that thread would then observe
- * the fresh 0 instead of the sentinel it needed to see to break out, and
- * spin forever waiting for a status update that will never come -- hanging
- * the whole grid, and thus session_stop's hipStreamSynchronize. The barrier
- * guarantees every thread in every block has already exited its poll loop
- * (having observed the same nonzero value -- nothing else writes status in
- * the window between that and the branch below) by the time the elected
- * thread performs the reset. grid.sync() is also a full memory fence across
- * the grid, same as __syncthreads() is within a block, so the reduction's
- * own two barriers below need no additional fencing beyond it.
+ * posted through the exact same channel as a normal command. status is
+ * accessed through __hip_atomic_load/__hip_atomic_store with
+ * __HIP_MEMORY_SCOPE_SYSTEM rather than a plain volatile read/write:
+ * volatile only orders a single thread's own accesses, it does not
+ * guarantee that once this thread observes a value the host wrote, the
+ * ordinary (non-atomic) reads of src1/src2/dst/count below see that same
+ * host write rather than a stale cached one. The system-scope atomic gives
+ * that cross-agent guarantee.
+ *
+ * Every thread in every block polls status independently (sleeping between
+ * polls), then snapshots the observed value into a local *before* the first
+ * grid.sync() and branches on that snapshot afterward, not on a fresh
+ * re-read of cmd->status. This matters even though every thread saw the
+ * same value to get past its own poll loop: after the barrier releases
+ * everyone, the elected thread races ahead to (on shutdown) reset status to
+ * 0, or (on normal completion, see below) advance it to 2. A fresh re-read
+ * by some other, slower thread could observe that already-updated value
+ * instead of the one that unblocked its own poll loop, making it take the
+ * wrong branch -- e.g. falling through to the compute path on shutdown,
+ * where it would then hang forever at a barrier the already-exited elected
+ * thread will never reach again. The pre-barrier snapshot is immune to
+ * this because nothing else writes status in the window between a thread
+ * unblocking its own poll and taking that snapshot.
+ *
+ * Two more grid.sync() calls bracket the actual reduction: one right after
+ * the snapshot (so every block has confirmed the round is real work, not
+ * shutdown, before any of them start touching src1/src2/dst -- and, on
+ * shutdown, so the elected thread only resets status once every thread has
+ * left its poll loop), and one right after the elected thread stores
+ * status = 2. That last barrier is necessary, not just tidy: without it, a
+ * non-elected block finishing early would loop back to the top of the
+ * while(1) and could re-read status (still this round's stale 1, not yet
+ * overwritten) before the elected thread's store happens, misreading it as
+ * a fresh round and recomputing the same data a second time. Forcing every
+ * block to wait for that store closes the window. grid.sync() is a full
+ * memory fence across the grid, same as __syncthreads() is within a block,
+ * so none of this needs additional fencing beyond the barriers themselves
+ * and the status atomic.
  *
  * On shutdown, the elected thread (block 0, thread 0) resets status back to
  * 0 (idle) itself before the kernel returns, so the device slot is already
@@ -77,6 +98,7 @@ namespace cg = cooperative_groups;
 __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         \
 {                                                                               \
     cg::grid_group grid = cg::this_grid();                                     \
+    int64_t grid_stride = (int64_t) blockDim.x * (int64_t) gridDim.x;           \
     bool elected = (0 == blockIdx.x && 0 == threadIdx.x);                      \
     while (1) {                                                                \
         /* Spin-wait for a new command or a shutdown request; sleep ~64       \
@@ -84,34 +106,60 @@ __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         
          * previous result hasn't been reclaimed by the host yet -- keep      \
          * waiting in that case too, or every thread would immediately redo   \
          * the last reduction on stale operands instead of sleeping.          \
-         * status < 0 is the shutdown sentinel. */                            \
-        while (cmd->status != 1 && cmd->status >= 0) {                        \
+         * status < 0 is the shutdown sentinel. System-scope atomics (not     \
+         * plain volatile) are used here so that once this load observes a    \
+         * value the host wrote, the ordinary reads of src1/src2/dst/count    \
+         * below are guaranteed to see that same host write, not a stale      \
+         * cached value -- plain volatile only orders this thread's own       \
+         * accesses, it does not provide that cross-agent guarantee. */       \
+        int32_t status = __hip_atomic_load(&cmd->status, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM); \
+        while (status != 1 && status >= 0) {                                  \
             __builtin_amdgcn_s_sleep(1);                                       \
+            status = __hip_atomic_load(&cmd->status, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM); \
         }                                                                       \
-        /* Every thread in every block has now individually exited its       \
-         * poll loop above -- required before anyone acts on the shutdown    \
-         * branch below; see the file comment for why. */                     \
+        /* Snapshot into a local before the barrier: every thread in every    \
+         * block has now individually exited its poll loop, so it is safe    \
+         * for the elected thread to act on the shutdown branch below once   \
+         * grid.sync() confirms everyone has arrived -- but the *decision*   \
+         * of which branch to take must use this snapshot, not a fresh       \
+         * re-read of cmd->status after the barrier: the elected thread's    \
+         * own write below (resetting status to 0) could otherwise race a    \
+         * slower thread's post-barrier read of the same location, making    \
+         * that thread take the wrong branch and later hang waiting at a     \
+         * barrier the already-exited elected thread will never reach. */    \
         grid.sync();                                                           \
-        if (cmd->status < 0) {                                                 \
+        if (status < 0) {                                                 \
             /* Leave the slot idle (status == 0) for the next launch -- the   \
              * host never needs to push a reset. */                            \
-            if (elected) { cmd->status = 0; }                                 \
+            if (elected) {                                                     \
+                __hip_atomic_store(&cmd->status, 0, __ATOMIC_RELAXED,           \
+                                   __HIP_MEMORY_SCOPE_SYSTEM);                  \
+            }                                                                   \
             break;                                                             \
         }                                                                      \
         const ctype * __restrict__ src1 = (const ctype *) cmd->src1;           \
         const ctype * __restrict__ src2 = (const ctype *) cmd->src2;           \
               ctype * __restrict__ dst  = (      ctype *) cmd->dst;            \
         int64_t n = cmd->count;                                                 \
-        int64_t grid_stride = (int64_t) blockDim.x * (int64_t) gridDim.x;      \
         for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;      \
              i < n; i += grid_stride) {                                        \
             op_expr;                                                            \
         }                                                                       \
+        __threadfence_system();   /* ensure dst writes reach host */            \
         grid.sync();                                                            \
         if (elected) {                                                          \
-            __threadfence_system();   /* ensure dst writes reach host */        \
-            cmd->status = 2;          /* signal done */                         \
+            __hip_atomic_store(&cmd->status, 2, __ATOMIC_RELAXED,              \
+                               __HIP_MEMORY_SCOPE_SYSTEM);  /* signal done */   \
         }                                                                       \
+        /* Without this barrier, a non-elected block released from the        \
+         * sync above could loop back and re-read cmd->status (top of the    \
+         * while(1)) before the elected thread executes the store just       \
+         * above -- seeing this round's now-stale 1 and immediately          \
+         * re-entering the compute path a second time on data nobody has     \
+         * refreshed, instead of correctly waiting for the *next* round.     \
+         * This forces every block to wait until the elected thread's store  \
+         * has actually happened before anyone can observe a new poll. */    \
+        grid.sync();                                                            \
     }                                                                           \
 }
 
