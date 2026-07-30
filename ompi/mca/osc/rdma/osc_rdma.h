@@ -224,6 +224,13 @@ struct ompi_osc_rdma_module_t {
     /** memory alignment to be used for new windows */
     size_t memory_alignment;
 
+    /** per-rank count of notification counters attached at each process in
+     * the window group, as last published by MPI_WIN_SET_NUM_NOTIFY. NULL
+     * until the first call to MPI_WIN_SET_NUM_NOTIFY (no counters attached
+     * anywhere). used by origins to validate notification indices against
+     * the target's attached count */
+    int *notify_counts;
+
     /* ********************* sync data ************************ */
 
     /** global sync object (PSCW, fence, lock all) */
@@ -324,6 +331,26 @@ OMPI_DECLSPEC extern ompi_osc_rdma_component_t mca_osc_rdma_component;
 #define GET_MODULE(win) ((ompi_osc_rdma_module_t*) win->w_osc_module)
 
 int ompi_osc_rdma_free (struct ompi_win_t *win);
+
+/* notified communication (MPI Standard section 12.6) */
+
+/** validate a notification index against the number of counters attached at
+ * {rank} (as last published by MPI_WIN_SET_NUM_NOTIFY). the standard makes
+ * it erroneous to reference a counter that is out of range at the target. */
+#define OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, rank)                  \
+    if (OPAL_UNLIKELY(NULL == (module)->notify_counts || (notify) < 0 ||      \
+                      (notify) >= (module)->notify_counts[(rank)])) {         \
+        return MPI_ERR_NOTIFY_IDX;                                            \
+    }
+
+int ompi_osc_rdma_win_get_notify_value (struct ompi_win_t *win, int notify,
+                                        OMPI_MPI_COUNT_TYPE *value);
+int ompi_osc_rdma_win_reset_notify_value (struct ompi_win_t *win, int notify,
+                                          OMPI_MPI_COUNT_TYPE *value);
+int ompi_osc_rdma_win_set_num_notify (struct ompi_win_t *win, struct opal_info_t *info,
+                                      int num_notifications);
+int ompi_osc_rdma_win_get_num_notify (struct ompi_win_t *win, int target_rank,
+                                      int *num_notifications);
 
 
 /* peer functions */

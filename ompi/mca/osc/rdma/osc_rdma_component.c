@@ -133,6 +133,13 @@ ompi_osc_base_module_t ompi_osc_rdma_module_rdma_template = {
     .osc_raccumulate = ompi_osc_rdma_raccumulate,
     .osc_rget_accumulate = ompi_osc_rdma_rget_accumulate,
 
+    .osc_put_notify = ompi_osc_rdma_put_notify,
+    .osc_get_notify = ompi_osc_rdma_get_notify,
+    .osc_win_get_notify_value = ompi_osc_rdma_win_get_notify_value,
+    .osc_win_reset_notify_value = ompi_osc_rdma_win_reset_notify_value,
+    .osc_win_set_num_notify = ompi_osc_rdma_win_set_num_notify,
+    .osc_win_get_num_notify = ompi_osc_rdma_win_get_num_notify,
+
     .osc_fence = ompi_osc_rdma_fence_atomic,
 
     .osc_start = ompi_osc_rdma_start_atomic,

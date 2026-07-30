@@ -99,6 +99,14 @@ int ompi_osc_rdma_rget (void *origin_addr, size_t origin_count, ompi_datatype_t 
                         ompi_datatype_t *target_dt, ompi_win_t *win,
                         ompi_request_t **request);
 
+int ompi_osc_rdma_put_notify (const void *origin_addr, size_t origin_count, ompi_datatype_t *origin_dt,
+                              int target, ptrdiff_t target_disp, size_t target_count,
+                              ompi_datatype_t *target_dt, int notify, ompi_win_t *win);
+
+int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datatype_t *origin_dt,
+                              int target, ptrdiff_t target_disp, size_t target_count,
+                              ompi_datatype_t *target_dt, int notify, ompi_win_t *win);
+
 /**
  * @brief read data from a remote memory region (blocking)
  *

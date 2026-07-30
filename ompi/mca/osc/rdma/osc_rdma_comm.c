@@ -946,3 +946,122 @@ int ompi_osc_rdma_rget (void *origin_addr, size_t origin_count, ompi_datatype_t 
 
     return OMPI_SUCCESS;
 }
+
+/* ******************* notified communication ******************* */
+
+static void ompi_osc_rdma_notify_atomic_complete (void *cbdata, void *cbcontext, int status)
+{
+    ompi_osc_rdma_sync_t *sync = (ompi_osc_rdma_sync_t *) cbdata;
+
+    (void) cbcontext;
+    (void) status;
+
+    ompi_osc_rdma_sync_rdma_dec_always (sync);
+}
+
+/**
+ * @brief atomically increment notification counter {notify} at {peer}
+ *
+ * The caller must ensure the data movement of the associated notified
+ * operation has completed at the target before calling this function
+ * (see ompi_osc_rdma_sync_rdma_complete). The increment is tracked
+ * against the sync object so that MPI_WIN_FLUSH (which must guarantee
+ * the notification is visible at the target) waits for it.
+ */
+static int ompi_osc_rdma_notify_increment (ompi_osc_rdma_sync_t *sync, ompi_osc_rdma_peer_t *peer, int notify)
+{
+    ompi_osc_rdma_module_t *module = sync->module;
+    uint64_t address = (uint64_t) (intptr_t) peer->state + offsetof (ompi_osc_rdma_state_t, notify_counters) +
+        (uint64_t) notify * sizeof (osc_rdma_counter_t);
+    int ret;
+
+    /* order the counter update after any local stores made on behalf of the
+     * data movement (local peers are handled with memcpy) */
+    opal_atomic_wmb ();
+
+    if (ompi_osc_rdma_peer_local_state (peer)) {
+        /* the local state flag is only set when it is safe to mix CPU and btl atomics */
+        (void) ompi_osc_rdma_counter_add ((osc_rdma_atomic_counter_t *) (intptr_t) address, 1);
+        return OMPI_SUCCESS;
+    }
+
+    ompi_osc_rdma_sync_rdma_inc_always (sync);
+
+    ret = ompi_osc_rdma_btl_op (module, peer->state_btl_index, peer->state_endpoint, address,
+                                peer->state_handle, MCA_BTL_ATOMIC_ADD, 1, 0, false,
+                                ompi_osc_rdma_notify_atomic_complete, (void *) sync, NULL);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        /* the completion callback will not be called */
+        ompi_osc_rdma_sync_rdma_dec_always (sync);
+    }
+
+    return ret;
+}
+
+int ompi_osc_rdma_put_notify (const void *origin_addr, size_t origin_count, ompi_datatype_t *origin_datatype,
+                              int target_rank, ptrdiff_t target_disp, size_t target_count,
+                              ompi_datatype_t *target_datatype, int notify, ompi_win_t *win)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    ompi_osc_rdma_peer_t *peer;
+    ompi_osc_rdma_sync_t *sync;
+    int ret;
+
+    OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_TRACE, "put_notify: 0x%lx, %zu, %s, %d, %d, %zu, %s, %d, %s",
+                     (unsigned long) origin_addr, origin_count, origin_datatype->name, target_rank,
+                     (int) target_disp, target_count, target_datatype->name, notify, win->w_name);
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, target_rank);
+
+    sync = ompi_osc_rdma_module_sync_lookup (module, target_rank, &peer);
+    if (OPAL_UNLIKELY(NULL == sync)) {
+        return OMPI_ERR_RMA_SYNC;
+    }
+
+    ret = ompi_osc_rdma_put_w_req (sync, origin_addr, origin_count, origin_datatype, peer, target_disp,
+                                   target_count, target_datatype, NULL);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    /* the notification counter may only be updated at the target after the data movement
+     * has completed there (MPI standard section 12.6). osc/rdma equates btl-level completion
+     * with remote completion (the same assumption MPI_WIN_FLUSH relies on), so completing
+     * all outstanding RDMA on this sync orders the counter increment after the put */
+    ompi_osc_rdma_sync_rdma_complete (sync);
+
+    return ompi_osc_rdma_notify_increment (sync, peer, notify);
+}
+
+int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datatype_t *origin_datatype,
+                              int source_rank, ptrdiff_t source_disp, size_t source_count,
+                              ompi_datatype_t *source_datatype, int notify, ompi_win_t *win)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    ompi_osc_rdma_peer_t *peer;
+    ompi_osc_rdma_sync_t *sync;
+    int ret;
+
+    OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_TRACE, "get_notify: 0x%lx, %zu, %s, %d, %d, %zu, %s, %d, %s",
+                     (unsigned long) origin_addr, origin_count, origin_datatype->name, source_rank,
+                     (int) source_disp, source_count, source_datatype->name, notify, win->w_name);
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, source_rank);
+
+    sync = ompi_osc_rdma_module_sync_lookup (module, source_rank, &peer);
+    if (OPAL_UNLIKELY(NULL == sync)) {
+        return OMPI_ERR_RMA_SYNC;
+    }
+
+    ret = ompi_osc_rdma_get_w_req (sync, origin_addr, origin_count, origin_datatype, peer,
+                                   source_disp, source_count, source_datatype, NULL);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    /* completion of the get at the origin implies the window memory at the target has
+     * been accessed, which is the ordering requirement for the counter update */
+    ompi_osc_rdma_sync_rdma_complete (sync);
+
+    return ompi_osc_rdma_notify_increment (sync, peer, notify);
+}

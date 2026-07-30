@@ -142,6 +142,7 @@ int ompi_osc_rdma_free(ompi_win_t *win)
 
     free (module->peer_array);
     free (module->outstanding_lock_array);
+    free (module->notify_counts);
     mca_mpool_base_default_module->mpool_free(mca_mpool_base_default_module,
                                               module->free_after);
     if (!module->use_accelerated_btl) {
@@ -151,6 +152,131 @@ int ompi_osc_rdma_free(ompi_win_t *win)
         free(module->alternate_am_rdmas);
     }
     free (module);
+
+    return OMPI_SUCCESS;
+}
+
+/* ******************* notified communication ******************* */
+
+int ompi_osc_rdma_win_get_notify_value (struct ompi_win_t *win, int notify, OMPI_MPI_COUNT_TYPE *value)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    int my_rank = ompi_comm_rank (module->comm);
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, my_rank);
+
+    /* the standard's usage model is polling this function until a counter
+     * reaches a threshold. progress the module so counter updates arrive even
+     * when the btl requires target-side progress (emulated atomics) */
+    ompi_osc_rdma_progress (module);
+
+    *value = (OMPI_MPI_COUNT_TYPE) ((volatile osc_rdma_counter_t *) module->state->notify_counters)[notify];
+    /* ensure loads of the window data are not reordered before the counter read */
+    opal_atomic_rmb ();
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_reset_notify_value (struct ompi_win_t *win, int notify, OMPI_MPI_COUNT_TYPE *value)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    ompi_osc_rdma_peer_t *my_peer = module->my_peer;
+    int my_rank = ompi_comm_rank (module->comm);
+    ompi_osc_rdma_lock_t old_value;
+    int ret;
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, my_rank);
+
+    /* the counter is incremented by remote origins with btl atomics, so the
+     * read-and-zero must be atomic with respect to those. use a CPU atomic
+     * only when the peer flags indicate it is safe to mix CPU and btl
+     * atomics, otherwise loop over a btl compare-and-swap on our own state */
+    if (ompi_osc_rdma_peer_local_state (my_peer)) {
+        old_value = module->state->notify_counters[notify];
+        while (!ompi_osc_rdma_lock_compare_exchange ((osc_rdma_atomic_counter_t *) (module->state->notify_counters + notify),
+                                                     &old_value, 0));
+    } else {
+        uint64_t address = (uint64_t) (intptr_t) my_peer->state + offsetof (ompi_osc_rdma_state_t, notify_counters) +
+            (uint64_t) notify * sizeof (osc_rdma_counter_t);
+        ompi_osc_rdma_lock_t result;
+
+        /* the local value is a guess at the current value. if another origin
+         * updates the counter concurrently the compare-and-swap fails and
+         * returns the new value to retry with */
+        old_value = module->state->notify_counters[notify];
+
+        do {
+            ret = ompi_osc_rdma_lock_btl_cswap (module, my_peer, address, old_value, 0, &result);
+            if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+                return ret;
+            }
+
+            if (result == old_value) {
+                break;
+            }
+
+            old_value = result;
+        } while (1);
+    }
+
+    *value = (OMPI_MPI_COUNT_TYPE) old_value;
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_set_num_notify (struct ompi_win_t *win, struct opal_info_t *info, int num_notifications)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    int my_rank = ompi_comm_rank (module->comm);
+    int my_count, ret;
+
+    (void) info; /* "mpi_assert_same_num_notifications" is an optimization hint only */
+
+    if (OPAL_UNLIKELY(num_notifications < 0 || num_notifications > OMPI_OSC_RDMA_NOTIFY_MAX)) {
+        return MPI_ERR_ARG;
+    }
+
+    /* it is erroneous to call MPI_WIN_SET_NUM_NOTIFY while an access epoch is open */
+    if (OPAL_UNLIKELY(ompi_osc_rdma_access_epoch_active (module))) {
+        return OMPI_ERR_RMA_SYNC;
+    }
+
+    if (NULL == module->notify_counts) {
+        module->notify_counts = calloc (ompi_comm_size (module->comm), sizeof (int));
+        if (OPAL_UNLIKELY(NULL == module->notify_counts)) {
+            return OMPI_ERR_OUT_OF_RESOURCE;
+        }
+    }
+
+    /* the number of attached notification counters is never decreased (section 12.6.1) */
+    if (num_notifications > module->notify_counts[my_rank]) {
+        module->notify_counts[my_rank] = num_notifications;
+    }
+
+    /* all notification counters (existing and newly attached) are reset to zero by
+     * this call. no access epoch is open so no btl atomics can be in flight on them */
+    memset ((void *) module->state->notify_counters, 0, sizeof (module->state->notify_counters));
+    opal_atomic_wmb ();
+
+    /* publish every rank's attached count to the whole group so origins can validate
+     * notification indices against the target's count. this allgather doubles as the
+     * blocking, synchronizing collective required by the standard */
+    my_count = module->notify_counts[my_rank];
+    ret = module->comm->c_coll->coll_allgather (&my_count, 1, MPI_INT, module->notify_counts, 1, MPI_INT,
+                                                module->comm, module->comm->c_coll->coll_allgather_module);
+
+    return ret;
+}
+
+int ompi_osc_rdma_win_get_num_notify (struct ompi_win_t *win, int target_rank, int *num_notifications)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+
+    if (OPAL_UNLIKELY(target_rank < 0 || target_rank >= ompi_comm_size (module->comm))) {
+        return MPI_ERR_RANK;
+    }
+
+    *num_notifications = (NULL != module->notify_counts) ? module->notify_counts[target_rank] : 0;
 
     return OMPI_SUCCESS;
 }
