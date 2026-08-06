@@ -34,6 +34,7 @@ sources = \
     btl_ofi_rdma.h \
     btl_ofi_rdma.c \
     btl_ofi_atomics.c \
+    btl_ofi_notification.c \
     btl_ofi_frag.c \
     btl_ofi_frag.h \
     btl_ofi_context.c

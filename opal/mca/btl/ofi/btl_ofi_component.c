@@ -219,6 +219,19 @@ static int mca_btl_ofi_component_register(void)
                                     MCA_BASE_VAR_SCOPE_READONLY,
                                     &mca_btl_ofi_component.disable_hmem);
 
+    mca_btl_ofi_component.enable_rma_event = true;
+    mca_base_component_var_register(&mca_btl_ofi_component.super.btl_version,
+                                    "enable_rma_event",
+                                    "Request FI_RMA_EVENT so notification counters can be bound "
+                                    "to memory regions, enabling RMA with notification in a "
+                                    "single operation. Requesting this capability may restrict "
+                                    "which memory registration modes a provider offers, so the "
+                                    "provider query is retried without it if nothing matches.",
+                                    MCA_BASE_VAR_TYPE_BOOL, NULL, 0, 0,
+                                    OPAL_INFO_LVL_5,
+                                    MCA_BASE_VAR_SCOPE_READONLY,
+                                    &mca_btl_ofi_component.enable_rma_event);
+
 
     /* for now we want this component to lose to the MTL. */
     module->super.btl_exclusivity = MCA_BTL_EXCLUSIVITY_HIGH - 50;
@@ -293,6 +306,7 @@ static mca_btl_base_module_t **mca_btl_ofi_component_init(int *num_btl_modules,
     struct fi_fabric_attr fabric_attr = {0};
     struct fi_domain_attr domain_attr = {0};
     uint64_t required_caps;
+    bool try_rma_event = mca_btl_ofi_component.enable_rma_event;
 
     switch (mca_btl_ofi_component.mode) {
 
@@ -379,6 +393,18 @@ static mca_btl_base_module_t **mca_btl_ofi_component_init(int *num_btl_modules,
 no_hmem:
 #endif
 
+    /* Request the ability to bind notification counters to memory regions.
+     * This is never added to required_caps: a provider without it is still
+     * perfectly usable, it just cannot accelerate RMA with notification. It
+     * has to go in the hints regardless because fi_getinfo treats requested
+     * caps as mandatory, which is also why it has its own fallback below. */
+no_rma_event:
+    if (try_rma_event) {
+        hints.caps |= FI_RMA_EVENT;
+    } else {
+        hints.caps &= ~FI_RMA_EVENT;
+    }
+
     hints.fabric_attr->fabric = opal_common_ofi.fabric;
     hints.domain_attr->domain = opal_common_ofi.domain;
 
@@ -400,6 +426,17 @@ no_hmem:
             && 0 == opal_common_ofi_count_providers_in_list(info_list, include_list))
         || (0 == rc && !include_list && exclude_list
             && opal_common_ofi_providers_subset_of_list(info_list, exclude_list))) {
+        /* Notification counters are an optimization, so give them up before
+         * giving up anything else. */
+        if (try_rma_event) {
+            BTL_VERBOSE(("no provider matched with FI_RMA_EVENT, retrying without it"));
+            try_rma_event = false;
+            if (info_list) {
+                (void) fi_freeinfo(info_list);
+                info_list = NULL;
+            }
+            goto no_rma_event;
+        }
 #if defined(FI_HMEM)
         /* Attempt selecting a provider without FI_HMEM hints */
         if (hints.caps & FI_HMEM) {
@@ -679,6 +716,18 @@ static int mca_btl_ofi_init_device(struct fi_info *info)
         module->super.btl_flags |= MCA_BTL_FLAGS_ACCELERATOR_RDMA;
     }
 #endif
+
+    /* Notification counters are bound to memory regions, so they are only
+     * meaningful when this module does RDMA at all. btl_register_mem is set
+     * by mca_btl_ofi_module_alloc() for the one-sided modes only. */
+    if ((ofi_info->caps & FI_RMA_EVENT) && NULL != module->super.btl_register_mem) {
+        module->super.btl_flags |= MCA_BTL_FLAGS_NOTIFIED_RMA;
+        module->super.btl_register_notification = mca_btl_ofi_register_notification;
+        module->super.btl_deregister_notification = mca_btl_ofi_deregister_notification;
+        module->super.btl_notification_read = mca_btl_ofi_notification_read;
+        module->super.btl_notification_wait = mca_btl_ofi_notification_wait;
+        BTL_VERBOSE(("%s supports notification counters", linux_device_name));
+    }
 
     if (ofi_info->domain_attr->mr_mode == MCA_BTL_OFI_MR_BASIC
         || ofi_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR) {

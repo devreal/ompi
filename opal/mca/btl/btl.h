@@ -273,6 +273,22 @@ typedef uint8_t mca_btl_base_tag_t;
  */
 #define MCA_BTL_FLAGS_RDMA_REMOTE_COMPLETION 0x800000
 
+/** The BTL can associate a hardware notification counter with a memory
+ * region. The counter is incremented by the network adapter at the target
+ * once a remote operation on that region has completed there, without any
+ * involvement of the target's CPU.
+ *
+ * A BTL that sets this flag must provide btl_register_notification,
+ * btl_deregister_notification, btl_notification_read and
+ * btl_notification_wait. The registration handle returned alongside the
+ * counter is an ordinary handle: an origin uses it as the remote handle of
+ * a btl_put or btl_get, and the counter at the target counts those
+ * operations. This lets a consumer implement RMA-with-notification with a
+ * single network operation rather than a data transfer followed by a
+ * separate atomic update.
+ */
+#define MCA_BTL_FLAGS_NOTIFIED_RMA 0x1000000
+
 /* End of btl flags. if additional flags are added please update
  * mca_btl_base_flag_enum_flags in btl_base_frame.c */
 
@@ -1170,6 +1186,95 @@ typedef int (*mca_btl_base_module_flush_fn_t)(struct mca_btl_base_module_t *btl,
                                               struct mca_btl_base_endpoint_t *endpoint);
 
 /**
+ * @brief Opaque handle to a hardware notification counter.
+ *
+ * The contents are private to the BTL. A notification is always local to the
+ * process that created it; it cannot be passed to or read by a peer.
+ */
+struct mca_btl_base_notification_t;
+typedef struct mca_btl_base_notification_t mca_btl_base_notification_t;
+
+/**
+ * @brief Register a memory region and bind a notification counter to it
+ *
+ * Registers [base, base + size) and associates a hardware counter with the
+ * registration. The counter starts at zero and is incremented by the network
+ * adapter once per completed remote operation on the region, after the data
+ * movement has completed at this process.
+ *
+ * The same memory may be registered this way more than once. Each such
+ * registration yields a distinct handle and a distinct counter, so a consumer
+ * that needs several independent counters over one buffer can obtain them by
+ * registering the buffer once per counter and publishing a different handle to
+ * origins for each. Registrations consume adapter resources, so callers should
+ * not create more than they need.
+ *
+ * Ownership of both the notification and the registration handle passes to the
+ * caller; both are released by btl_deregister_notification.
+ *
+ * @param[IN]  btl     BTL module
+ * @param[IN]  base    Pointer to start of region
+ * @param[IN]  size    Size of region
+ * @param[IN]  flags   Registration flags including access permissions
+ * @param[OUT] handle  Registration handle to publish to origins
+ *
+ * @returns a notification handle, or NULL if the region could not be
+ * registered or no counter could be associated with it.
+ */
+typedef struct mca_btl_base_notification_t *(*mca_btl_base_module_register_notification_fn_t)(
+    struct mca_btl_base_module_t *btl, void *base, size_t size, uint32_t flags,
+    struct mca_btl_base_registration_handle_t **handle);
+
+/**
+ * @brief Release a notification counter and its memory registration
+ *
+ * No remote operation may target the associated region after this call.
+ *
+ * @param[IN] btl           BTL module the notification was created with
+ * @param[IN] notification  Notification to release
+ */
+typedef int (*mca_btl_base_module_deregister_notification_fn_t)(
+    struct mca_btl_base_module_t *btl, struct mca_btl_base_notification_t *notification);
+
+/**
+ * @brief Read the current value of a notification counter
+ *
+ * This is a local operation and does not guarantee progress of outstanding
+ * operations. The value is monotonically non-decreasing for the lifetime of
+ * the notification; the BTL never resets it. A consumer that needs to reset a
+ * counter should record the value at reset time and subtract it from
+ * subsequent reads, which avoids racing against increments still in flight.
+ *
+ * @param[IN]  btl           BTL module
+ * @param[IN]  notification  Notification to read
+ * @param[OUT] value         Current counter value
+ */
+typedef int (*mca_btl_base_module_notification_read_fn_t)(
+    struct mca_btl_base_module_t *btl, struct mca_btl_base_notification_t *notification,
+    uint64_t *value);
+
+/**
+ * @brief Wait for a notification counter to reach a threshold
+ *
+ * Blocks until the counter is greater than or equal to threshold, or until
+ * timeout milliseconds have elapsed. A timeout of 0 polls once and returns
+ * immediately; a negative timeout blocks indefinitely.
+ *
+ * Returns OPAL_SUCCESS if the threshold was reached and OPAL_ERR_TIMEOUT if it
+ * was not. Because this call may block inside the adapter or the kernel, a
+ * caller that must also guarantee MPI progress should either use a short
+ * timeout or poll with btl_notification_read instead.
+ *
+ * @param[IN] btl           BTL module
+ * @param[IN] notification  Notification to wait on
+ * @param[IN] threshold     Counter value to wait for
+ * @param[IN] timeout       Milliseconds to wait, or negative to block
+ */
+typedef int (*mca_btl_base_module_notification_wait_fn_t)(
+    struct mca_btl_base_module_t *btl, struct mca_btl_base_notification_t *notification,
+    uint64_t threshold, int timeout);
+
+/**
  * BTL module interface functions and attributes.
  */
 struct mca_btl_base_module_t {
@@ -1244,6 +1349,13 @@ struct mca_btl_base_module_t {
     union {
         struct {
             void *btl_am_data;
+
+            /* notification counters. only valid when the BTL sets
+             * MCA_BTL_FLAGS_NOTIFIED_RMA */
+            mca_btl_base_module_register_notification_fn_t btl_register_notification;
+            mca_btl_base_module_deregister_notification_fn_t btl_deregister_notification;
+            mca_btl_base_module_notification_read_fn_t btl_notification_read;
+            mca_btl_base_module_notification_wait_fn_t btl_notification_wait;
         };
         unsigned char padding[256]; /**< padding to future-proof the
                                        btl module */

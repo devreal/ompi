@@ -968,6 +968,60 @@ static void ompi_osc_rdma_notify_atomic_complete (void *cbdata, void *cbcontext,
  * against the sync object so that MPI_WIN_FLUSH (which must guarantee
  * the notification is visible at the target) waits for it.
  */
+/**
+ * @brief can this notified operation be carried by a single btl operation?
+ *
+ * When the btl provides notification counters the notification is a side
+ * effect of the data movement: the origin targets the registration handle the
+ * target published for that notification index and the adapter increments the
+ * matching counter once per operation it completes. That equivalence only
+ * holds when the transfer maps to exactly one btl operation, since the counter
+ * counts operations and the standard requires exactly one increment per
+ * notified call, so everything that might be split or served without touching
+ * the adapter has to take the atomic path instead.
+ */
+static inline bool ompi_osc_rdma_notify_single_op (ompi_osc_rdma_module_t *module, ompi_osc_rdma_peer_t *peer,
+                                                   size_t origin_count, ompi_datatype_t *origin_datatype,
+                                                   size_t target_count, ompi_datatype_t *target_datatype,
+                                                   size_t limit, size_t alignment, size_t *size)
+{
+    size_t origin_size, target_size;
+
+    if (!module->use_notify_counters) {
+        return false;
+    }
+
+    /* a peer we can reach with loads and stores is served by a direct copy
+     * that the adapter never observes */
+    if (ompi_osc_rdma_peer_local_base (peer)) {
+        return false;
+    }
+
+    if (!ompi_datatype_is_contiguous_memory_layout (origin_datatype, origin_count)
+        || !ompi_datatype_is_contiguous_memory_layout (target_datatype, target_count)) {
+        return false;
+    }
+
+    ompi_datatype_type_size (origin_datatype, &origin_size);
+    ompi_datatype_type_size (target_datatype, &target_size);
+    origin_size *= origin_count;
+    target_size *= target_count;
+
+    if (origin_size != target_size || 0 == origin_size || origin_size > limit) {
+        return false;
+    }
+
+    /* a transfer that does not meet the btl's alignment requirement is broken
+     * into a head, a body and a tail */
+    if (alignment && (origin_size & (alignment - 1))) {
+        return false;
+    }
+
+    *size = origin_size;
+
+    return true;
+}
+
 static int ompi_osc_rdma_notify_increment (ompi_osc_rdma_sync_t *sync, ompi_osc_rdma_peer_t *peer, int notify)
 {
     ompi_osc_rdma_module_t *module = sync->module;
@@ -1005,6 +1059,7 @@ int ompi_osc_rdma_put_notify (const void *origin_addr, size_t origin_count, ompi
     ompi_osc_rdma_module_t *module = GET_MODULE(win);
     ompi_osc_rdma_peer_t *peer;
     ompi_osc_rdma_sync_t *sync;
+    size_t size;
     int ret;
 
     OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_TRACE, "put_notify: 0x%lx, %zu, %s, %d, %d, %zu, %s, %d, %s",
@@ -1016,6 +1071,26 @@ int ompi_osc_rdma_put_notify (const void *origin_addr, size_t origin_count, ompi
     sync = ompi_osc_rdma_module_sync_lookup (module, target_rank, &peer);
     if (OPAL_UNLIKELY(NULL == sync)) {
         return OMPI_ERR_RMA_SYNC;
+    }
+
+    /* when the btl counts operations in hardware the notification rides along
+     * with the put itself: no second operation to issue and nothing to order
+     * it against, so the origin never has to stall here */
+    if (ompi_osc_rdma_notify_single_op (module, peer, origin_count, origin_datatype, target_count,
+                                        target_datatype, module->put_limit, 0, &size)) {
+        mca_btl_base_registration_handle_t *target_handle;
+        uint64_t target_address;
+
+        ret = osc_rdma_get_remote_segment (module, peer, target_disp, size, &target_address, &target_handle);
+        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+            return ret;
+        }
+
+        /* targeting the handle the peer published for this notification index
+         * is what selects which of its counters the adapter advances */
+        return ompi_osc_rdma_put_contig (sync, peer, target_address,
+                                         ompi_osc_rdma_peer_notify_handle (module, target_rank, notify),
+                                         (void *) (intptr_t) origin_addr, size, NULL);
     }
 
     ret = ompi_osc_rdma_put_w_req (sync, origin_addr, origin_count, origin_datatype, peer, target_disp,
@@ -1040,6 +1115,7 @@ int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datat
     ompi_osc_rdma_module_t *module = GET_MODULE(win);
     ompi_osc_rdma_peer_t *peer;
     ompi_osc_rdma_sync_t *sync;
+    size_t size;
     int ret;
 
     OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_TRACE, "get_notify: 0x%lx, %zu, %s, %d, %d, %zu, %s, %d, %s",
@@ -1051,6 +1127,25 @@ int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datat
     sync = ompi_osc_rdma_module_sync_lookup (module, source_rank, &peer);
     if (OPAL_UNLIKELY(NULL == sync)) {
         return OMPI_ERR_RMA_SYNC;
+    }
+
+    if (ompi_osc_rdma_notify_single_op (module, peer, origin_count, origin_datatype, source_count,
+                                        source_datatype, module->get_limit, module->get_alignment, &size)) {
+        mca_btl_base_registration_handle_t *source_handle;
+        uint64_t source_address;
+
+        ret = osc_rdma_get_remote_segment (module, peer, source_disp, size, &source_address, &source_handle);
+        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+            return ret;
+        }
+
+        /* an unaligned source is fetched as a head, a body and a tail, which
+         * the adapter would count three times */
+        if (!(source_address & ALIGNMENT_MASK(module->get_alignment))) {
+            return ompi_osc_rdma_get_contig (sync, peer, source_address,
+                                             ompi_osc_rdma_peer_notify_handle (module, source_rank, notify),
+                                             origin_addr, size, NULL);
+        }
     }
 
     ret = ompi_osc_rdma_get_w_req (sync, origin_addr, origin_count, origin_datatype, peer,

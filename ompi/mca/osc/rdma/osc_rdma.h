@@ -231,6 +231,35 @@ struct ompi_osc_rdma_module_t {
      * the target's attached count */
     int *notify_counts;
 
+    /** notification counters bound to the window base by the accelerated btl,
+     * one per attached notification index. when these are in use an origin
+     * notifies by targeting the matching registration handle, so the adapter
+     * increments the counter as a side effect of the data movement itself and
+     * no separate atomic (and no flush to order it) is needed. NULL entries
+     * are indices that are not attached. */
+    struct mca_btl_base_notification_t *notify_handles[OMPI_OSC_RDMA_NOTIFY_MAX];
+
+    /** raw value of each hardware counter at the last reset. the btl never
+     * resets a counter, so MPI_WIN_RESET_NOTIFY_VALUE records a base here and
+     * subsequent reads report the difference. */
+    uint64_t notify_reset_base[OMPI_OSC_RDMA_NOTIFY_MAX];
+
+    /** registration handles published by every rank for their notification
+     * counters, packed as [rank * notify_stride + notify] entries of
+     * notify_handle_size bytes each. NULL when counters are not in use. */
+    unsigned char *notify_peer_handles;
+
+    /** size in bytes of one published notification registration handle */
+    size_t notify_handle_size;
+
+    /** number of handles published per rank, i.e. the group-wide maximum
+     * number of attached notification counters */
+    int notify_stride;
+
+    /** true when this window notifies through btl notification counters
+     * rather than through atomics on the counters in the window state */
+    bool use_notify_counters;
+
     /* ********************* sync data ************************ */
 
     /** global sync object (PSCW, fence, lock all) */
@@ -343,6 +372,23 @@ int ompi_osc_rdma_free (struct ompi_win_t *win);
         return MPI_ERR_NOTIFY_IDX;                                            \
     }
 
+/**
+ * @brief registration handle rank {rank} published for its notification counter {notify}
+ *
+ * An origin targets this handle instead of the ordinary window handle to make
+ * the adapter at the target count the operation. Only valid when
+ * module->use_notify_counters is set.
+ */
+static inline mca_btl_base_registration_handle_t *
+ompi_osc_rdma_peer_notify_handle (ompi_osc_rdma_module_t *module, int rank, int notify)
+{
+    size_t offset = ((size_t) rank * (size_t) module->notify_stride + (size_t) notify)
+        * module->notify_handle_size;
+
+    return (mca_btl_base_registration_handle_t *) (module->notify_peer_handles + offset);
+}
+
+void ompi_osc_rdma_notify_counters_destroy (ompi_osc_rdma_module_t *module);
 int ompi_osc_rdma_win_get_notify_value (struct ompi_win_t *win, int notify,
                                         OMPI_MPI_COUNT_TYPE *value);
 int ompi_osc_rdma_win_reset_notify_value (struct ompi_win_t *win, int notify,
