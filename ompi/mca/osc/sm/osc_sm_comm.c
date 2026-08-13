@@ -223,7 +223,7 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
     int rank = ompi_comm_rank(module->comm);
     unsigned long requested = (unsigned long) num_notifications;
     unsigned long *new_caps;
-    bool grow = false;
+    bool grow = false, bad;
     int ret, i;
 
     /* "mpi_assert_same_num_notifications" would let us skip the allgather below
@@ -232,7 +232,18 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
      * synchronizing and collective. */
     (void) info;
 
-    if (num_notifications < 0) {
+    /* num_notifications is a local argument -- MPI-5.1 12.6.1 allows it to
+     * differ between MPI processes -- but this is a synchronizing collective.
+     * A rank that rejected its own value and returned here would leave every
+     * other rank blocked in the allgather below, turning an erroneous argument
+     * into a hang.  So the validity rides through the collective as a sentinel
+     * and all ranks fail together.  A multi-process window defers the decision;
+     * a single-process one has nobody to agree with and can answer now. */
+    bad = (num_notifications < 0)
+          || (0 != module->notify_max_assert &&
+              requested > (unsigned long) module->notify_max_assert);
+
+    if (bad && 1 == comm_size) {
         return MPI_ERR_ARG;
     }
 
@@ -267,6 +278,7 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
         return OMPI_SUCCESS;
     }
 
+agree:
     new_caps = malloc(sizeof(*new_caps) * comm_size);
     if (NULL == new_caps) {
         return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
@@ -279,6 +291,16 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
     if (OMPI_SUCCESS != ret) {
         free(new_caps);
         return ret;
+    }
+
+    for (i = 0 ; i < comm_size ; ++i) {
+        if (ULONG_MAX == new_caps[i]) {
+            /* Some rank supplied an invalid count.  Every rank sees the same
+             * gathered array, so they all report the same error and none of
+             * them reconfigures. */
+            free(new_caps);
+            return MPI_ERR_ARG;
+        }
     }
 
     for (i = 0 ; i < comm_size ; ++i) {
