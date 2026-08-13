@@ -30,9 +30,16 @@ PROTOTYPE ERROR_CLASS win_set_num_notify(WIN win, INFO info, INT num_notificatio
             return OMPI_ERRHANDLER_NOHANDLE_INVOKE(MPI_ERR_WIN, FUNC_NAME);
         } else if (NULL != info && MPI_INFO_NULL != info && ompi_info_is_freed(info)) {
             rc = MPI_ERR_INFO;
-        } else if (num_notifications < 0) {
-            rc = MPI_ERR_ARG;
         }
+
+        /* num_notifications is deliberately *not* range-checked here.
+           MPI_WIN_SET_NUM_NOTIFY is a synchronizing collective whose count
+           argument is local -- MPI-5.1 12.6.1 allows it to differ between MPI
+           processes -- so a rank that rejected its own value here would return
+           while every other rank stayed blocked in the osc module's internal
+           collective, turning an erroneous argument into a hang.  The module
+           carries each rank's validity through that collective instead, so all
+           ranks agree to fail together. */
 
         OMPI_ERRHANDLER_CHECK(rc, win, rc, FUNC_NAME);
     }
