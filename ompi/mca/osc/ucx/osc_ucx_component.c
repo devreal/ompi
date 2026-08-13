@@ -169,16 +169,22 @@ static bool check_config_value_bool (char *key, opal_info_t *info)
 }
 
 /* Read the mpi_assert_max_num_notify info key (MPI-5.1 section 12.2) to decide
- * how many notification counters to reserve per MPI process.  The counters are
- * registered as part of the window's memory region and that registration cannot
- * grow later, so the reservation is a hard upper bound on
- * MPI_WIN_SET_NUM_NOTIFY for the lifetime of the window. */
-static int osc_ucx_reserved_notify_counters(opal_info_t *info, unsigned int *reserved)
+ * how many notification counters to reserve per MPI process initially, and
+ * report in *asserted whether the key was actually given.
+ *
+ * The key is an assertion by the caller that it will not ask
+ * MPI_WIN_SET_NUM_NOTIFY for more than this, which lets us size the
+ * registration once and treat it as a hard upper bound.  Without it the
+ * standard is explicit that "the implementation does not assume any limit", so
+ * the reservation is only a starting size and the counters grow on demand. */
+static int osc_ucx_reserved_notify_counters(opal_info_t *info, unsigned int *reserved,
+                                            bool *asserted)
 {
     opal_cstring_t *value_string;
     int flag = 0, value = 0;
 
     *reserved = mca_osc_ucx_component.num_notify_counters;
+    *asserted = false;
 
     if (NULL == info) {
         return OMPI_SUCCESS;
@@ -203,6 +209,7 @@ static int osc_ucx_reserved_notify_counters(opal_info_t *info, unsigned int *res
 
     if (0 != value) {
         *reserved = (unsigned int) value;
+        *asserted = true;
     }
 
     return OMPI_SUCCESS;
@@ -755,20 +762,25 @@ select_unlock:
      * rest of the group blocked in window creation -- so the failure is carried
      * through the collective as a negative reservation instead. */
     unsigned int notify_reserved = 0;
-    int notify_values[2];
+    bool notify_asserted = false;
+    int notify_values[3];
     /* The reservation is exchanged as an int and is used to size an allocation,
      * so a value that does not fit is a bad configuration rather than a request
      * to honor.  Both failures ride the flag, not the value: MPI_MAX would hide
      * a sentinel value behind some other rank's larger reservation. */
-    bool notify_bad = (OMPI_SUCCESS != osc_ucx_reserved_notify_counters(info, &notify_reserved))
+    bool notify_bad = (OMPI_SUCCESS != osc_ucx_reserved_notify_counters(info, &notify_reserved,
+                                                                        &notify_asserted))
                       || notify_reserved > (unsigned int) INT_MAX;
     notify_values[0] = notify_bad ? 1 : 0;
     notify_values[1] = notify_bad ? 0 : (int) notify_reserved;
+    /* Carried as "some rank did NOT assert" so that it combines under MPI_MAX
+     * along with the other two values. */
+    notify_values[2] = notify_asserted ? 0 : 1;
 
     /* info is allowed to differ between MPI processes, so agree on one
      * reservation for the whole window.  Taking the maximum keeps every rank's
      * own assertion satisfiable, and propagates any rank's failure flag. */
-    ret = module->comm->c_coll->coll_allreduce(MPI_IN_PLACE, notify_values, 2,
+    ret = module->comm->c_coll->coll_allreduce(MPI_IN_PLACE, notify_values, 3,
                                               MPI_INT, MPI_MAX, module->comm,
                                               module->comm->c_coll->coll_allreduce_module);
     if (OMPI_SUCCESS != ret) {
@@ -779,6 +791,11 @@ select_unlock:
         goto error;
     }
     module->notify_capacity = (unsigned int) notify_values[1];
+    /* Only treat the reservation as a hard cap when *every* rank asserted a
+     * bound.  A rank that gave no key made no promise, so the window has to
+     * stay growable for it -- MPI-5.1 12.2 says an absent (zero) key means the
+     * implementation assumes no limit. */
+    module->notify_max_assert = notify_values[2] ? 0 : (unsigned int) notify_values[1];
 
     module->no_locks = check_config_value_bool ("no_locks", info);
     module->acc_single_intrinsic = check_config_value_bool ("acc_single_intrinsic", info);
@@ -1236,6 +1253,92 @@ int ompi_osc_ucx_dynamic_unlock(ompi_osc_ucx_module_t *module, int target) {
     }
 
     assert(result_value == TARGET_LOCK_EXCLUSIVE);
+    return OMPI_SUCCESS;
+}
+
+/* Collectively replace the notification-counter registration with a larger one.
+ *
+ * Called from MPI_WIN_SET_NUM_NOTIFY, which the standard defines as a blocking,
+ * synchronizing collective procedure -- that is what makes this safe.  Every
+ * rank has to take part even if its own request fits, because registering the
+ * memory exchanges rkeys with the whole group.
+ *
+ * Two properties of MPI_WIN_SET_NUM_NOTIFY keep this simple.  It resets every
+ * counter to zero, so a freshly calloc'd region is already the required
+ * contents and no value has to be carried across.  And it is erroneous to call
+ * it while an access epoch is open or with an active notification-threshold
+ * request, so no remote atomic can be in flight against the old region while it
+ * is being replaced.
+ *
+ * The allgather of the new base addresses doubles as the barrier that lets the
+ * old region be released: once it completes, every rank has published its new
+ * address and no rank can issue a notified operation until it returns from the
+ * enclosing collective. */
+int ompi_osc_ucx_grow_notify_counters(ompi_osc_ucx_module_t *module,
+                                      unsigned int new_capacity)
+{
+    int comm_size = ompi_comm_size(module->comm);
+    opal_common_ucx_wpmem_t *new_mem = NULL;
+    void *new_base = NULL, *reg_base;
+    char *my_mem_addr = NULL;
+    uint64_t my_addr, *new_addrs = NULL;
+    int my_mem_addr_size = 0;
+    int ret;
+
+    new_base = calloc(new_capacity, sizeof(uint64_t));
+    if (NULL == new_base) {
+        return MPI_ERR_NO_MEM;
+    }
+
+    new_addrs = calloc(comm_size, sizeof(uint64_t));
+    if (NULL == new_addrs) {
+        free(new_base);
+        return MPI_ERR_NO_MEM;
+    }
+
+    reg_base = new_base;
+    ret = opal_common_ucx_wpmem_create(module->ctx, &reg_base,
+                                       new_capacity * sizeof(uint64_t),
+                                       OPAL_COMMON_UCX_MEM_MAP,
+                                       &exchange_len_info,
+                                       OPAL_COMMON_UCX_WPMEM_ADDR_EXCHANGE_FULL,
+                                       (void *)module->comm,
+                                       &my_mem_addr, &my_mem_addr_size,
+                                       &new_mem);
+    if (OMPI_SUCCESS != ret) {
+        free(new_addrs);
+        free(new_base);
+        return ret;
+    }
+
+    if (0 != my_mem_addr_size) {
+        /* rkey object is already distributed among comm processes */
+        ucp_rkey_buffer_release(my_mem_addr);
+    }
+
+    my_addr = (uint64_t) new_base;
+    ret = module->comm->c_coll->coll_allgather(&my_addr, sizeof(uint64_t), MPI_BYTE,
+                                               new_addrs, sizeof(uint64_t), MPI_BYTE,
+                                               module->comm,
+                                               module->comm->c_coll->coll_allgather_module);
+    if (OMPI_SUCCESS != ret) {
+        opal_common_ucx_wpmem_free(new_mem);
+        free(new_addrs);
+        free(new_base);
+        return ret;
+    }
+
+    if (NULL != module->notify_mem) {
+        opal_common_ucx_wpmem_free(module->notify_mem);
+    }
+    free(module->notify_base);
+    free(module->notify_addrs);
+
+    module->notify_mem = new_mem;
+    module->notify_base = new_base;
+    module->notify_addrs = new_addrs;
+    module->notify_capacity = new_capacity;
+
     return OMPI_SUCCESS;
 }
 
