@@ -20,16 +20,32 @@
  *   - All cuda* API calls replaced by their hip* equivalents
  *   - Launcher macro uses ompi_op_rocm_persistent_* prefix
  *
- * Each kernel runs across however many blocks of 1024 threads the device
- * can run concurrently (see ompi_op_rocm_compute_coop_grid_size() below),
- * cooperating via cooperative-groups grid.sync() rather than a single
- * block's __syncthreads(), so large reductions can use the whole device
- * instead of a single CU's worth of bandwidth. Because grid.sync() requires
- * the kernel to have been launched through the cooperative-launch API on a
- * device that supports it -- true regardless of block count -- the launcher
- * below always goes through hipLaunchCooperativeKernel and treats a device
- * lacking that capability as fatal (see the launcher comment); there is no
- * plain <<<>>> fallback path for this kernel body.
+ * OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL (set right below, flip and rebuild to
+ * switch) selects between two complete implementations sharing everything
+ * except how blocks are coordinated:
+ *
+ *   1 (default): multi-block, cooperative-groups grid.sync(). Each kernel
+ *      runs across however many blocks of 1024 threads the device can run
+ *      concurrently (see ompi_op_rocm_compute_coop_grid_size() below), so
+ *      large reductions can use the whole device instead of a single CU's
+ *      worth of bandwidth. Requires launching through the cooperative-launch
+ *      API (hipLaunchCooperativeKernel) on a device that supports it -- true
+ *      regardless of block count -- and treats a device lacking that
+ *      capability as fatal (see the launcher comment).
+ *
+ *   0: single block of 1024 threads, __syncthreads() only, plain <<<>>>
+ *      launch -- no cooperative-launch dependency, no occupancy query, at
+ *      the cost of a ceiling of one CU's worth of memory bandwidth. Useful
+ *      given the persistent cooperative kernel has been observed to
+ *      serialize against hipMemcpy on some ROCm configurations -- if that
+ *      turns out to be a real, unavoidable interaction rather than a bug on
+ *      our end, this is the fallback.
+ *
+ * Everything below this point (the poll loop, the atomic status protocol,
+ * the barrier placement and why each one is needed, the work-splitting
+ * loop, the elected-thread convention) is identical in both modes -- a
+ * single block is just the degenerate case of a cooperative grid (gridDim.x
+ * == 1, blockIdx.x always 0), so the same macro body produces both.
  *
  * There is no separate shutdown flag: status < 0 is the shutdown sentinel,
  * posted through the exact same channel as a normal command. status is
@@ -76,16 +92,32 @@
  * ready for the next launch without the host ever needing to push a reset.
  */
 
+/* See the file comment above:
+ * 1 = multi-block cooperative-groups kernel
+ * 0 = single-block __syncthreads()-only kernel. */
+#ifndef OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL
+#define OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL 0
+#endif
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <hip/hip_runtime.h>
-#include <hip/hip_cooperative_groups.h>
 
 #include "opal/util/output.h"
 #include "ompi/mca/op/op.h"
 #include "ompi/mca/op/rocm/op_rocm.h"
 
+#if OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL
+#include <hip/hip_cooperative_groups.h>
 namespace cg = cooperative_groups;
+/* Declares whatever the barrier below needs in scope (a grid_group handle,
+ * in this mode) and performs the grid-wide barrier itself. */
+#define OMPI_OP_ROCM_GRID_DECL   cg::grid_group grid = cg::this_grid();
+#define OMPI_OP_ROCM_GRID_SYNC() grid.sync()
+#else
+#define OMPI_OP_ROCM_GRID_DECL
+#define OMPI_OP_ROCM_GRID_SYNC() __syncthreads()
+#endif
 
 /* -------------------------------------------------------------------------
  * PERSISTENT_KERNEL(name, ctype, op_expr)
@@ -97,7 +129,7 @@ namespace cg = cooperative_groups;
 #define PERSISTENT_KERNEL(kname, ctype, op_expr)                               \
 __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         \
 {                                                                               \
-    cg::grid_group grid = cg::this_grid();                                     \
+    OMPI_OP_ROCM_GRID_DECL                                                     \
     int64_t grid_stride = (int64_t) blockDim.x * (int64_t) gridDim.x;           \
     bool elected = (0 == blockIdx.x && 0 == threadIdx.x);                      \
     while (1) {                                                                \
@@ -127,7 +159,7 @@ __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         
          * slower thread's post-barrier read of the same location, making    \
          * that thread take the wrong branch and later hang waiting at a     \
          * barrier the already-exited elected thread will never reach. */    \
-        grid.sync();                                                           \
+        OMPI_OP_ROCM_GRID_SYNC();                                              \
         if (status < 0) {                                                 \
             /* Leave the slot idle (status == 0) for the next launch -- the   \
              * host never needs to push a reset. */                            \
@@ -146,7 +178,7 @@ __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         
             op_expr;                                                            \
         }                                                                       \
         __threadfence_system();   /* ensure dst writes reach host */            \
-        grid.sync();                                                            \
+        OMPI_OP_ROCM_GRID_SYNC();                                               \
         if (elected) {                                                          \
             __hip_atomic_store(&cmd->status, 2, __ATOMIC_RELAXED,              \
                                __HIP_MEMORY_SCOPE_SYSTEM);  /* signal done */   \
@@ -159,7 +191,7 @@ __global__ void ompi_op_rocm_persistent_##kname(ompi_op_gpu_cmd_t *cmd)         
          * refreshed, instead of correctly waiting for the *next* round.     \
          * This forces every block to wait until the elected thread's store  \
          * has actually happened before anyone can observe a new poll. */    \
-        grid.sync();                                                            \
+        OMPI_OP_ROCM_GRID_SYNC();                                               \
     }                                                                           \
 }
 
@@ -245,6 +277,7 @@ PERSISTENT_KERNEL(bxor_uint32, uint32_t, dst[i] = src1[i] ^ src2[i])
 PERSISTENT_KERNEL(bxor_int64,  int64_t,  dst[i] = src1[i] ^ src2[i])
 PERSISTENT_KERNEL(bxor_uint64, uint64_t, dst[i] = src1[i] ^ src2[i])
 
+#if OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL
 /* =========================================================================
  * ompi_op_rocm_compute_coop_grid_size
  *
@@ -325,6 +358,22 @@ static void launch_##kname(ompi_op_gpu_cmd_t *cmd,                            \
     hipLaunchCooperativeKernel((void *) ompi_op_rocm_persistent_##kname,        \
                                dim3(blocks), dim3(1024), args, 0, stream);      \
 }
+#else /* !OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL */
+/* =========================================================================
+ * Host-side launcher wrappers — one per kernel, single block of 1024
+ * threads, plain launch. dev_id is unused here (kept so the function
+ * pointer type matches the cooperative build's launcher unconditionally --
+ * see ompi_op_rocm_launcher_fn_t in op_rocm.h).
+ * ========================================================================= */
+#define LAUNCHER(kname)                                                        \
+static void launch_##kname(ompi_op_gpu_cmd_t *cmd,                            \
+                            hipStream_t        stream,                         \
+                            int                dev_id)                        \
+{                                                                               \
+    (void) dev_id;                                                             \
+    ompi_op_rocm_persistent_##kname<<<1, 1024, 0, stream>>>(cmd);              \
+}
+#endif /* OMPI_OP_ROCM_USE_COOPERATIVE_KERNEL */
 
 LAUNCHER(max_int8)    LAUNCHER(max_uint8)
 LAUNCHER(max_int16)   LAUNCHER(max_uint16)
