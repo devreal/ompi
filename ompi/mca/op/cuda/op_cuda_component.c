@@ -111,23 +111,54 @@ cuda_component_op_query(struct ompi_op_t *op, int *priority)
  * per clock); link bandwidth comes from the device's current PCIe link
  * generation/width via sysfs. NVLink is not detected -- if the device sits
  * behind NVLink rather than plain PCIe, this underestimates link bandwidth.
+ *
+ * Queried via cudaDeviceGetAttribute rather than cudaGetDeviceProperties:
+ * cudaDeviceProp's memoryClockRate/memoryBusWidth fields were removed in
+ * CUDA 12 (they don't map cleanly onto Hopper+'s memory subsystem, so NVIDIA
+ * dropped them from the struct rather than leave them meaningless) -- the
+ * equivalent cudaDeviceAttr enum values are stable across CUDA versions and
+ * already the query style used elsewhere in this component (see
+ * ompi_op_cuda_compute_coop_grid_size in op_cuda_kernels.cu). If a newer
+ * architecture also renders these particular attributes meaningless, a
+ * device_bw_bytes_per_sec <= 0 is treated by the caller (coll_tuned_gpu.c)
+ * as "estimate unavailable" and falls back to the compiled-in default
+ * threshold, not a crash.
  */
 static int
 cuda_component_query_bandwidth(int dev_id, double *device_bw_bytes_per_sec,
                                double *link_bw_bytes_per_sec)
 {
-    struct cudaDeviceProp prop;
-    cudaError_t err = cudaGetDeviceProperties(&prop, dev_id);
+    int memory_clock_khz = 0, bus_width_bits = 0;
+    int pci_domain = 0, pci_bus = 0, pci_device = 0;
+
+    cudaError_t err = cudaDeviceGetAttribute(&memory_clock_khz, cudaDevAttrMemoryClockRate,
+                                             dev_id);
+    if (cudaSuccess != err) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    err = cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, dev_id);
     if (cudaSuccess != err) {
         return OMPI_ERR_NOT_SUPPORTED;
     }
 
-    *device_bw_bytes_per_sec = 2.0 * ((double) prop.memoryClockRate * 1000.0)
-                               * ((double) prop.memoryBusWidth / 8.0);
+    *device_bw_bytes_per_sec = 2.0 * ((double) memory_clock_khz * 1000.0)
+                               * ((double) bus_width_bits / 8.0);
+
+    err = cudaDeviceGetAttribute(&pci_domain, cudaDevAttrPciDomainId, dev_id);
+    if (cudaSuccess != err) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    err = cudaDeviceGetAttribute(&pci_bus, cudaDevAttrPciBusId, dev_id);
+    if (cudaSuccess != err) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
+    err = cudaDeviceGetAttribute(&pci_device, cudaDevAttrPciDeviceId, dev_id);
+    if (cudaSuccess != err) {
+        return OMPI_ERR_NOT_SUPPORTED;
+    }
 
     /* Function 0 is the GPU's primary (compute/display) function; this
      * assumption holds for the conventional single-GPU-per-slot case. */
-    return ompi_op_gpu_query_pcie_link_bandwidth(prop.pciDomainID, prop.pciBusID,
-                                                 prop.pciDeviceID, 0,
+    return ompi_op_gpu_query_pcie_link_bandwidth(pci_domain, pci_bus, pci_device, 0,
                                                  link_bw_bytes_per_sec);
 }
