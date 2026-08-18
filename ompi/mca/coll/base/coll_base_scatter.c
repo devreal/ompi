@@ -64,7 +64,8 @@ ompi_coll_base_scatter_intra_binomial(
     const void *sbuf, size_t scount, struct ompi_datatype_t *sdtype,
     void *rbuf, size_t rcount, struct ompi_datatype_t *rdtype,
     int root, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module)
+    mca_coll_base_module_t *module,
+    mca_allocator_base_module_t *allocator)
 {
     mca_coll_base_module_t *base_module = (mca_coll_base_module_t*)module;
     mca_coll_base_comm_t *data = base_module->base_data;
@@ -110,7 +111,7 @@ ompi_coll_base_scatter_intra_binomial(
             opal_convertor_get_packed_size( &convertor, &packed_sizet );
             packed_size = packed_sizet;
             packed_sizet = packed_sizet / size;
-            ptmp = tempbuf = (char *)malloc(packed_size);
+            ptmp = tempbuf = (char *) COLL_BASE_ALLOC(allocator, packed_size);
             if (NULL == tempbuf) {
                 err = OMPI_ERR_OUT_OF_RESOURCE; line = __LINE__; goto err_hndl;
             }
@@ -147,7 +148,7 @@ ompi_coll_base_scatter_intra_binomial(
             subtree_size = size - vrank;
         packed_size = scount * subtree_size;
 
-        ptmp = tempbuf = (char *)malloc(packed_size);
+        ptmp = tempbuf = (char *) COLL_BASE_ALLOC(allocator, packed_size);
         if (NULL == tempbuf) {
             err = OMPI_ERR_OUT_OF_RESOURCE; line = __LINE__; goto err_hndl;
         }
@@ -185,13 +186,13 @@ ompi_coll_base_scatter_intra_binomial(
         curr_count -= send_count;
     }
     if (NULL != tempbuf)
-        free(tempbuf);
+        COLL_BASE_FREE(allocator, tempbuf);
 
     return MPI_SUCCESS;
 
  err_hndl:
     if (NULL != tempbuf)
-        free(tempbuf);
+        COLL_BASE_FREE(allocator, tempbuf);
 
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output,  "%s:%4d\tError occurred %d, rank %2d",
                  __FILE__, line, err, rank));

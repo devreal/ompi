@@ -44,6 +44,45 @@ mca_coll_basic_module_disable(mca_coll_base_module_t *module,
                              struct ompi_communicator_t *comm);
 
 /*
+ * The coll module vtable slots (coll_reduce, coll_exscan, coll_scan) have a
+ * fixed signature that does not carry a GPU session. The basic component
+ * installs the coll_base linear algorithms directly into those slots, so
+ * wrap them here to supply session=NULL rather than changing the vtable ABI.
+ */
+static int
+mca_coll_basic_reduce_intra_basic_linear(const void *sbuf, void *rbuf, size_t count,
+                                         struct ompi_datatype_t *dtype,
+                                         struct ompi_op_t *op, int root,
+                                         struct ompi_communicator_t *comm,
+                                         mca_coll_base_module_t *module)
+{
+    return ompi_coll_base_reduce_intra_basic_linear(sbuf, rbuf, count, dtype,
+                                                     op, root, comm, module, NULL);
+}
+
+static int
+mca_coll_basic_exscan_intra_linear(const void *sbuf, void *rbuf, size_t count,
+                                   struct ompi_datatype_t *dtype,
+                                   struct ompi_op_t *op,
+                                   struct ompi_communicator_t *comm,
+                                   mca_coll_base_module_t *module)
+{
+    return ompi_coll_base_exscan_intra_linear(sbuf, rbuf, count, dtype,
+                                              op, comm, module, NULL);
+}
+
+static int
+mca_coll_basic_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
+                                 struct ompi_datatype_t *dtype,
+                                 struct ompi_op_t *op,
+                                 struct ompi_communicator_t *comm,
+                                 mca_coll_base_module_t *module)
+{
+    return ompi_coll_base_scan_intra_linear(sbuf, rbuf, count, dtype,
+                                            op, comm, module, NULL);
+}
+
+/*
  * Initial query function that is invoked during MPI_INIT, allowing
  * this component to disqualify itself if it doesn't support the
  * required level of thread support.
@@ -126,7 +165,7 @@ mca_coll_basic_module_enable(mca_coll_base_module_t *module,
         if (ompi_comm_size(comm) <= mca_coll_basic_crossover) {
             BASIC_INSTALL_COLL_API(comm, basic_module, barrier, ompi_coll_base_barrier_intra_basic_linear);
             BASIC_INSTALL_COLL_API(comm, basic_module, bcast, ompi_coll_base_bcast_intra_basic_linear);
-            BASIC_INSTALL_COLL_API(comm, basic_module, reduce, ompi_coll_base_reduce_intra_basic_linear);
+            BASIC_INSTALL_COLL_API(comm, basic_module, reduce, mca_coll_basic_reduce_intra_basic_linear);
         } else {
             BASIC_INSTALL_COLL_API(comm, basic_module, barrier, mca_coll_basic_barrier_intra_log);
             BASIC_INSTALL_COLL_API(comm, basic_module, bcast, mca_coll_basic_bcast_log_intra);
@@ -138,12 +177,12 @@ mca_coll_basic_module_enable(mca_coll_base_module_t *module,
         BASIC_INSTALL_COLL_API(comm, basic_module, alltoall, ompi_coll_base_alltoall_intra_basic_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, alltoallv, ompi_coll_base_alltoallv_intra_basic_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, alltoallw, mca_coll_basic_alltoallw_intra);
-        BASIC_INSTALL_COLL_API(comm, basic_module, exscan, ompi_coll_base_exscan_intra_linear);
+        BASIC_INSTALL_COLL_API(comm, basic_module, exscan, mca_coll_basic_exscan_intra_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, gather, ompi_coll_base_gather_intra_basic_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, gatherv, mca_coll_basic_gatherv_intra);
         BASIC_INSTALL_COLL_API(comm, basic_module, reduce_scatter_block, mca_coll_basic_reduce_scatter_block_intra);
         BASIC_INSTALL_COLL_API(comm, basic_module, reduce_scatter, mca_coll_basic_reduce_scatter_intra);
-        BASIC_INSTALL_COLL_API(comm, basic_module, scan, ompi_coll_base_scan_intra_linear);
+        BASIC_INSTALL_COLL_API(comm, basic_module, scan, mca_coll_basic_scan_intra_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, scatter, ompi_coll_base_scatter_intra_basic_linear);
         BASIC_INSTALL_COLL_API(comm, basic_module, scatterv, mca_coll_basic_scatterv_intra);
     }

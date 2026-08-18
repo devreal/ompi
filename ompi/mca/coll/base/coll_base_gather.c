@@ -44,7 +44,8 @@ ompi_coll_base_gather_intra_binomial(const void *sbuf, size_t scount,
                                       struct ompi_datatype_t *rdtype,
                                       int root,
                                       struct ompi_communicator_t *comm,
-                                      mca_coll_base_module_t *module)
+                                      mca_coll_base_module_t *module,
+                                      mca_allocator_base_module_t *allocator)
 {
     int line = -1, i, rank, vrank, size, err;
     size_t total_recv = 0;
@@ -82,7 +83,7 @@ ompi_coll_base_gather_intra_binomial(const void *sbuf, size_t scount,
         } else {
             /* root is not on 0, allocate temp buffer for recv,
              * rotate data at the end */
-            tempbuf = (char *) malloc(rsize);
+            tempbuf = (char *) COLL_BASE_ALLOC(allocator, rsize);
             if (NULL == tempbuf) {
                 err= OMPI_ERR_OUT_OF_RESOURCE; line = __LINE__; goto err_hndl;
             }
@@ -107,7 +108,7 @@ ompi_coll_base_gather_intra_binomial(const void *sbuf, size_t scount,
          * to the property of binimoal tree */
         ompi_datatype_type_extent(sdtype, &sextent);
         ssize = opal_datatype_span(&sdtype->super, (int64_t)scount * size, &sgap);
-        tempbuf = (char *) malloc(ssize);
+        tempbuf = (char *) COLL_BASE_ALLOC(allocator, ssize);
         if (NULL == tempbuf) {
             err= OMPI_ERR_OUT_OF_RESOURCE; line = __LINE__; goto err_hndl;
         }
@@ -180,17 +181,16 @@ ompi_coll_base_gather_intra_binomial(const void *sbuf, size_t scount,
                                                       (char *) rbuf, ptmp + rextent * (ptrdiff_t)rcount * (ptrdiff_t)(size-root));
             if (MPI_SUCCESS != err) { line = __LINE__; goto err_hndl; }
 
-            free(tempbuf);
+            COLL_BASE_FREE(allocator, tempbuf);
         }
     } else if (!(vrank % 2)) {
         /* other non-leaf nodes */
-        free(tempbuf);
+        COLL_BASE_FREE(allocator, tempbuf);
     }
     return MPI_SUCCESS;
 
  err_hndl:
-    if (NULL != tempbuf)
-        free(tempbuf);
+    COLL_BASE_FREE(allocator, tempbuf);
 
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output,  "%s:%4d\tError occurred %d, rank %2d",
                  __FILE__, line, err, rank));

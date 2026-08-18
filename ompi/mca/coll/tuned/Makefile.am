@@ -29,6 +29,7 @@ sources = \
         coll_tuned_dynamic_file.c \
         coll_tuned_dynamic_rules.c \
         coll_tuned_component.c \
+        coll_tuned_gpu.c \
         coll_tuned_module.c \
         coll_tuned_allgather_decision.c \
         coll_tuned_allgatherv_decision.c \

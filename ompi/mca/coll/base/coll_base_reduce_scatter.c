@@ -34,6 +34,7 @@
 #include "ompi/mca/coll/base/coll_tags.h"
 #include "ompi/mca/pml/pml.h"
 #include "ompi/op/op.h"
+#include "ompi/op/op_gpu_session.h"
 #include "ompi/mca/coll/base/coll_base_functions.h"
 #include "coll_base_topo.h"
 #include "coll_base_util.h"
@@ -49,7 +50,8 @@ int ompi_coll_base_reduce_scatter_intra_nonoverlapping(const void *sbuf, void *r
                                                         struct ompi_datatype_t *dtype,
                                                         struct ompi_op_t *op,
                                                         struct ompi_communicator_t *comm,
-                                                        mca_coll_base_module_t *module)
+                                                        mca_coll_base_module_t *module,
+                                                        ompi_op_gpu_session_t *session)
 {
     int err, i, rank, size, total_count;
     ptrdiff_t *displs = NULL;
@@ -82,14 +84,14 @@ int ompi_coll_base_reduce_scatter_intra_nonoverlapping(const void *sbuf, void *r
             ptrdiff_t dsize, gap = 0;
             dsize = opal_datatype_span(&dtype->super, total_count, &gap);
 
-            tmprbuf_free = (char*) malloc(dsize);
+            tmprbuf_free = (char*) COLL_SESSION_ALLOC(session, dsize);
             tmprbuf = tmprbuf_free - gap;
         }
         err = comm->c_coll->coll_reduce (sbuf, tmprbuf, total_count,
                                         dtype, op, root, comm, comm->c_coll->coll_reduce_module);
     }
     if (MPI_SUCCESS != err) {
-        if (NULL != tmprbuf_free) free(tmprbuf_free);
+        COLL_SESSION_FREE(session, tmprbuf_free);
         return err;
     }
 
@@ -109,7 +111,7 @@ int ompi_coll_base_reduce_scatter_intra_nonoverlapping(const void *sbuf, void *r
                                            root, comm, comm->c_coll->coll_scatterv_module);
     }
     free(displs);
-    if (NULL != tmprbuf_free) free(tmprbuf_free);
+    COLL_SESSION_FREE(session, tmprbuf_free);
 
     return err;
 }
@@ -138,7 +140,8 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
                                                             struct ompi_datatype_t *dtype,
                                                             struct ompi_op_t *op,
                                                             struct ompi_communicator_t *comm,
-                                                            mca_coll_base_module_t *module)
+                                                            mca_coll_base_module_t *module,
+                                                            ompi_op_gpu_session_t *session)
 {
     int i, rank, size, err = OMPI_SUCCESS;
     int tmp_size, remain = 0, tmp_rank;
@@ -180,7 +183,7 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
     }
 
     /* Allocate temporary receive buffer. */
-    recv_buf_free = (char*) malloc(buf_size);
+    recv_buf_free = (char*) COLL_SESSION_ALLOC(session, buf_size);
     recv_buf = recv_buf_free - gap;
     if (NULL == recv_buf_free) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
@@ -188,7 +191,7 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
     }
 
     /* allocate temporary buffer for results */
-    result_buf_free = (char*) malloc(buf_size);
+    result_buf_free = (char*) COLL_SESSION_ALLOC(session, buf_size);
     result_buf = result_buf_free - gap;
 
     /* copy local buffer into the temporary results */
@@ -221,7 +224,7 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
                                     comm, MPI_STATUS_IGNORE));
 
             /* integrate their results into our temp results */
-            ompi_op_reduce(op, recv_buf, result_buf, count, dtype);
+            COLL_BASE_REDUCE(session, op, recv_buf, result_buf, count, dtype);
 
             /* adjust rank to be the bottom "remain" ranks */
             tmp_rank = rank / 2;
@@ -339,10 +342,10 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
                     goto cleanup;
                 }
 
-                ompi_op_reduce(op,
-                               recv_buf + tmp_disps[recv_index] * extent,
-                               result_buf + tmp_disps[recv_index] * extent,
-                               recv_count, dtype);
+                COLL_BASE_REDUCE(session, op,
+                                 recv_buf + tmp_disps[recv_index] * extent,
+                                 result_buf + tmp_disps[recv_index] * extent,
+                                 recv_count, dtype);
             }
 
             /* update for next iteration */
@@ -391,8 +394,8 @@ ompi_coll_base_reduce_scatter_intra_basic_recursivehalving( const void *sbuf,
 
  cleanup:
     if (NULL != disps) free(disps);
-    if (NULL != recv_buf_free) free(recv_buf_free);
-    if (NULL != result_buf_free) free(result_buf_free);
+    COLL_SESSION_FREE(session, recv_buf_free);
+    COLL_SESSION_FREE(session, result_buf_free);
 
     return err;
 }
@@ -464,7 +467,8 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
                                           struct ompi_datatype_t *dtype,
                                           struct ompi_op_t *op,
                                           struct ompi_communicator_t *comm,
-                                          mca_coll_base_module_t *module)
+                                          mca_coll_base_module_t *module,
+                                          ompi_op_gpu_session_t *session)
 {
     int ret, line, rank, size, i, k, recv_from, send_to;
     int inbi;
@@ -518,15 +522,15 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
     max_real_segsize = opal_datatype_span(&dtype->super, max_block_count, &gap);
     dsize = opal_datatype_span(&dtype->super, total_count, &gap);
 
-    accumbuf_free = (char*)malloc(dsize);
+    accumbuf_free = (char*)COLL_SESSION_ALLOC(session, dsize);
     if (NULL == accumbuf_free) { ret = -1; line = __LINE__; goto error_hndl; }
     accumbuf = accumbuf_free - gap;
 
-    inbuf_free[0] = (char*)malloc(max_real_segsize);
+    inbuf_free[0] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
     if (NULL == inbuf_free[0]) { ret = -1; line = __LINE__; goto error_hndl; }
     inbuf[0] = inbuf_free[0] - gap;
     if (size > 2) {
-        inbuf_free[1] = (char*)malloc(max_real_segsize);
+        inbuf_free[1] = (char*)COLL_SESSION_ALLOC(session, max_real_segsize);
         if (NULL == inbuf_free[1]) { ret = -1; line = __LINE__; goto error_hndl; }
         inbuf[1] = inbuf_free[1] - gap;
     }
@@ -591,7 +595,7 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
            rbuf[prevblock] = inbuf[inbi ^ 0x1] (op) rbuf[prevblock]
         */
         tmprecv = accumbuf + displs[prevblock] * extent;
-        ompi_op_reduce(op, inbuf[inbi ^ 0x1], tmprecv, ompi_count_array_get(rcounts, prevblock), dtype);
+        COLL_BASE_REDUCE(session, op, inbuf[inbi ^ 0x1], tmprecv, ompi_count_array_get(rcounts, prevblock), dtype);
 
         /* send previous block to send_to */
         ret = MCA_PML_CALL(send(tmprecv, ompi_count_array_get(rcounts, prevblock), dtype, send_to,
@@ -607,7 +611,7 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
     /* Apply operation on the last block (my block)
        rbuf[rank] = inbuf[inbi] (op) rbuf[rank] */
     tmprecv = accumbuf + displs[rank] * extent;
-    ompi_op_reduce(op, inbuf[inbi], tmprecv, ompi_count_array_get(rcounts, rank), dtype);
+    COLL_BASE_REDUCE(session, op, inbuf[inbi], tmprecv, ompi_count_array_get(rcounts, rank), dtype);
 
     /* Copy result from tmprecv to rbuf */
     ret = ompi_datatype_copy_content_same_ddt(dtype, ompi_count_array_get(rcounts, rank),
@@ -615,9 +619,9 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
     if (ret < 0) { line = __LINE__; goto error_hndl; }
 
     if (NULL != displs) free(displs);
-    if (NULL != accumbuf_free) free(accumbuf_free);
-    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
-    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
+    COLL_SESSION_FREE(session, accumbuf_free);
+    COLL_SESSION_FREE(session, inbuf_free[0]);
+    COLL_SESSION_FREE(session, inbuf_free[1]);
 
     return MPI_SUCCESS;
 
@@ -626,9 +630,9 @@ ompi_coll_base_reduce_scatter_intra_ring( const void *sbuf, void *rbuf, ompi_cou
                  __FILE__, line, rank, ret));
     (void)line;  // silence compiler warning
     if (NULL != displs) free(displs);
-    if (NULL != accumbuf_free) free(accumbuf_free);
-    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
-    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
+    COLL_SESSION_FREE(session, accumbuf_free);
+    COLL_SESSION_FREE(session, inbuf_free[0]);
+    COLL_SESSION_FREE(session, inbuf_free[1]);
     return ret;
 }
 
@@ -701,7 +705,7 @@ int
 ompi_coll_base_reduce_scatter_intra_butterfly(
     const void *sbuf, void *rbuf, ompi_count_array_t rcounts, struct ompi_datatype_t *dtype,
     struct ompi_op_t *op, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module)
+    mca_coll_base_module_t *module, ompi_op_gpu_session_t *session)
 {
     char *tmpbuf[2] = {NULL, NULL}, *psend, *precv;
     ptrdiff_t *displs = NULL, index;
@@ -729,8 +733,8 @@ ompi_coll_base_reduce_scatter_intra_butterfly(
 
     ompi_datatype_type_extent(dtype, &extent);
     span = opal_datatype_span(&dtype->super, totalcount, &gap);
-    tmpbuf[0] = malloc(span);
-    tmpbuf[1] = malloc(span);
+    tmpbuf[0] = COLL_SESSION_ALLOC(session, span);
+    tmpbuf[1] = COLL_SESSION_ALLOC(session, span);
     if (NULL == tmpbuf[0] || NULL == tmpbuf[1]) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
         goto cleanup_and_return;
@@ -781,7 +785,7 @@ ompi_coll_base_reduce_scatter_intra_butterfly(
                                     MCA_COLL_BASE_TAG_REDUCE_SCATTER,
                                     comm, MPI_STATUS_IGNORE));
             if (OMPI_SUCCESS != err) { goto cleanup_and_return; }
-            ompi_op_reduce(op, precv, psend, totalcount, dtype);
+            COLL_BASE_REDUCE(session, op, precv, psend, totalcount, dtype);
             /* Adjust rank to be the bottom "remain" ranks */
             vrank = rank / 2;
         }
@@ -837,15 +841,15 @@ ompi_coll_base_reduce_scatter_intra_butterfly(
 
             if (vrank < vpeer) {
                 /* precv = psend <op> precv */
-                ompi_op_reduce(op, psend + rdispl * extent,
-                               precv + rdispl * extent, recv_count, dtype);
+                COLL_BASE_REDUCE(session, op, psend + rdispl * extent,
+                                 precv + rdispl * extent, recv_count, dtype);
                 char *p = psend;
                 psend = precv;
                 precv = p;
             } else {
                 /* psend = precv <op> psend */
-                ompi_op_reduce(op, precv + rdispl * extent,
-                               psend + rdispl * extent, recv_count, dtype);
+                COLL_BASE_REDUCE(session, op, precv + rdispl * extent,
+                                 psend + rdispl * extent, recv_count, dtype);
             }
             send_index = recv_index;
         }
@@ -899,9 +903,7 @@ ompi_coll_base_reduce_scatter_intra_butterfly(
 cleanup_and_return:
     if (displs)
         free(displs);
-    if (tmpbuf[0])
-        free(tmpbuf[0]);
-    if (tmpbuf[1])
-        free(tmpbuf[1]);
+    COLL_SESSION_FREE(session, tmpbuf[0]);
+    COLL_SESSION_FREE(session, tmpbuf[1]);
     return err;
 }

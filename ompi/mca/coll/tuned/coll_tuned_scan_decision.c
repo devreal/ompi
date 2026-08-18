@@ -93,7 +93,7 @@ int ompi_coll_tuned_scan_intra_do_this(const void *sbuf, void* rbuf, size_t coun
                                          struct ompi_op_t *op,
                                          struct ompi_communicator_t *comm,
                                          mca_coll_base_module_t *module,
-                                         int algorithm)
+                                         int algorithm, ompi_op_gpu_session_t *session)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:scan_intra_do_this selected algorithm %d",
@@ -102,9 +102,9 @@ int ompi_coll_tuned_scan_intra_do_this(const void *sbuf, void* rbuf, size_t coun
     switch (algorithm) {
     case (0):
     case (1):  return ompi_coll_base_scan_intra_linear(sbuf, rbuf, count, dtype,
-                                                       op, comm, module);
+                                                       op, comm, module, session);
     case (2):  return ompi_coll_base_scan_intra_recursivedoubling(sbuf, rbuf, count, dtype,
-                                                                  op, comm, module);
+                                                                  op, comm, module, session);
     } /* switch */
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:scan_intra_do_this attempt to select algorithm %d when only 0-%d is valid?",

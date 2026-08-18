@@ -23,6 +23,7 @@
 #include "ompi/mca/coll/base/coll_base_util.h"
 #include "ompi/mca/pml/pml.h"
 #include "ompi/op/op.h"
+#include "ompi/op/op_gpu_session.h"
 
 /*
  * ompi_coll_base_scan_intra_linear
@@ -36,7 +37,8 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
                                 struct ompi_datatype_t *dtype,
                                 struct ompi_op_t *op,
                                 struct ompi_communicator_t *comm,
-                                mca_coll_base_module_t *module)
+                                mca_coll_base_module_t *module,
+                                ompi_op_gpu_session_t *session)
 {
     int size, rank, err;
     ptrdiff_t dsize, gap;
@@ -67,7 +69,7 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
          * receive into, later. */
 
         dsize = opal_datatype_span(&dtype->super, count, &gap);
-        free_buffer = malloc(dsize);
+        free_buffer = COLL_SESSION_ALLOC(session, dsize);
         if (NULL == free_buffer) {
             return OMPI_ERR_OUT_OF_RESOURCE;
         }
@@ -79,7 +81,7 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
             err = ompi_datatype_copy_content_same_ddt(dtype, count, (char*)rbuf, (char*)sbuf);
             if (MPI_SUCCESS != err) {
                 if (NULL != free_buffer) {
-                    free(free_buffer);
+                    COLL_SESSION_FREE(session, free_buffer);
                 }
                 return err;
             }
@@ -92,19 +94,19 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
                                 MPI_STATUS_IGNORE));
         if (MPI_SUCCESS != err) {
             if (NULL != free_buffer) {
-                free(free_buffer);
+                COLL_SESSION_FREE(session, free_buffer);
             }
             return err;
         }
 
         /* Perform the operation */
 
-        ompi_op_reduce(op, pml_buffer, rbuf, count, dtype);
+        COLL_BASE_REDUCE(session, op, pml_buffer, rbuf, count, dtype);
 
         /* All done */
 
         if (NULL != free_buffer) {
-            free(free_buffer);
+            COLL_SESSION_FREE(session, free_buffer);
         }
     }
 
@@ -157,7 +159,7 @@ ompi_coll_base_scan_intra_linear(const void *sbuf, void *rbuf, size_t count,
 int ompi_coll_base_scan_intra_recursivedoubling(
     const void *sendbuf, void *recvbuf, size_t count, struct ompi_datatype_t *datatype,
     struct ompi_op_t *op, struct ompi_communicator_t *comm,
-    mca_coll_base_module_t *module)
+    mca_coll_base_module_t *module, ompi_op_gpu_session_t *session)
 {
     int err = MPI_SUCCESS;
     char *tmpsend_raw = NULL, *tmprecv_raw = NULL;
@@ -179,8 +181,8 @@ int ompi_coll_base_scan_intra_recursivedoubling(
 
     ptrdiff_t dsize, gap;
     dsize = opal_datatype_span(&datatype->super, count, &gap);
-    tmpsend_raw = malloc(dsize);
-    tmprecv_raw = malloc(dsize);
+    tmpsend_raw = COLL_SESSION_ALLOC(session, dsize);
+    tmprecv_raw = COLL_SESSION_ALLOC(session, dsize);
     if (NULL == tmpsend_raw || NULL == tmprecv_raw) {
         err = OMPI_ERR_OUT_OF_RESOURCE;
         goto cleanup_and_return;
@@ -203,16 +205,16 @@ int ompi_coll_base_scan_intra_recursivedoubling(
 
             if (rank > remote) {
                 /* Accumulate prefix reduction: recvbuf = precv <op> recvbuf */
-                ompi_op_reduce(op, precv, recvbuf, count, datatype);
+                COLL_BASE_REDUCE(session, op, precv, recvbuf, count, datatype);
                 /* Partial result: psend = precv <op> psend */
-                ompi_op_reduce(op, precv, psend, count, datatype);
+                COLL_BASE_REDUCE(session, op, precv, psend, count, datatype);
             } else {
                 if (is_commute) {
                     /* psend = precv <op> psend */
-                    ompi_op_reduce(op, precv, psend, count, datatype);
+                    COLL_BASE_REDUCE(session, op, precv, psend, count, datatype);
                 } else {
                     /* precv = psend <op> precv */
-                    ompi_op_reduce(op, psend, precv, count, datatype);
+                    COLL_BASE_REDUCE(session, op, psend, precv, count, datatype);
                     char *tmp = psend;
                     psend = precv;
                     precv = tmp;
@@ -222,9 +224,7 @@ int ompi_coll_base_scan_intra_recursivedoubling(
     }
 
 cleanup_and_return:
-    if (NULL != tmpsend_raw)
-        free(tmpsend_raw);
-    if (NULL != tmprecv_raw)
-        free(tmprecv_raw);
+    COLL_SESSION_FREE(session, tmpsend_raw);
+    COLL_SESSION_FREE(session, tmprecv_raw);
     return err;
 }

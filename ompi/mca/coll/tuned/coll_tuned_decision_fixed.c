@@ -29,11 +29,14 @@
 
 #include "mpi.h"
 #include "opal/util/bit_ops.h"
+#include "opal/mca/accelerator/accelerator.h"
+#include "opal/mca/accelerator/base/base.h"
 #include "ompi/datatype/ompi_datatype.h"
 #include "ompi/communicator/communicator.h"
 #include "ompi/mca/coll/coll.h"
 #include "ompi/mca/coll/base/coll_tags.h"
 #include "ompi/op/op.h"
+#include "ompi/op/op_gpu_session.h"
 #include "coll_tuned.h"
 
 /*
@@ -214,8 +217,13 @@ ompi_coll_tuned_allreduce_intra_dec_fixed(const void *sbuf, void *rbuf, size_t c
         }
     }
 
-    return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
-                                                    comm, module, alg, 0, 0);
+    {
+        int rc;
+        COLL_TUNED_GPU_DISPATCH(op, dtype, sbuf, rbuf, total_dsize, rc,
+            ompi_coll_tuned_allreduce_intra_do_this(_sbuf, _rbuf, count, dtype, op,
+                                                    comm, module, alg, 0, 0, session));
+        return rc;
+    }
 }
 
 
@@ -402,7 +410,7 @@ ompi_coll_tuned_allreduce_intra_disjoint_dec_fixed(const void *sbuf, void *rbuf,
     }
 
     return ompi_coll_tuned_allreduce_intra_do_this (sbuf, rbuf, count, dtype, op,
-                                                    comm, module, alg, 0, 0);
+                                                    comm, module, alg, 0, 0, NULL);
 }
 
                            
@@ -1073,10 +1081,15 @@ int ompi_coll_tuned_reduce_intra_dec_fixed( const void *sendbuf, void *recvbuf,
         }
     }
 
-    int faninout = 2;
-    return  ompi_coll_tuned_reduce_intra_do_this (sendbuf, recvbuf, count, datatype,
-                                                  op, root, comm, module,
-                                                  alg, faninout, 0, 0);
+    {
+        int faninout = 2;
+        int rc;
+        COLL_TUNED_GPU_DISPATCH(op, datatype, sendbuf, recvbuf, total_dsize, rc,
+            ompi_coll_tuned_reduce_intra_do_this(_sbuf, _rbuf, count, datatype,
+                                                 op, root, comm, module,
+                                                 alg, faninout, 0, 0, session));
+        return rc;
+    }
 }
 
 /*
@@ -1223,9 +1236,15 @@ int ompi_coll_tuned_reduce_scatter_intra_dec_fixed( const void *sbuf, void *rbuf
         }
     }
 
-    return  ompi_coll_tuned_reduce_scatter_intra_do_this (sbuf, rbuf, rcounts, dtype,
-                                                          op, comm, module,
-                                                          alg, 0, 0);
+    {
+        size_t _rbuf_dsize = dsize * ompi_count_array_get(rcounts, ompi_comm_rank(comm));
+        int rc;
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, total_dsize, _rbuf_dsize, total_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_intra_do_this(_sbuf, _rbuf, rcounts, dtype,
+                                                         op, comm, module,
+                                                         alg, 0, 0, session));
+        return rc;
+    }
 }
 
 /*
@@ -1344,9 +1363,15 @@ int ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(const void *sbuf, void 
         }
     }
 
-    return  ompi_coll_tuned_reduce_scatter_block_intra_do_this (sbuf, rbuf, rcount, dtype,
-                                                                op, comm, module,
-                                                                alg, 0, 0);
+    {
+        size_t _sbuf_dsize = total_dsize * (size_t)communicator_size;
+        int rc;
+        COLL_TUNED_GPU_DISPATCH_ASYM(op, dtype, sbuf, rbuf, _sbuf_dsize, total_dsize, total_dsize, rc,
+            ompi_coll_tuned_reduce_scatter_block_intra_do_this(_sbuf, _rbuf, rcount, dtype,
+                                                               op, comm, module,
+                                                               alg, 0, 0, session));
+        return rc;
+    }
 }
 
 /*
@@ -1491,10 +1516,21 @@ int ompi_coll_tuned_allgather_intra_dec_fixed(const void *sbuf, size_t scount,
         "ompi_coll_tuned_allgather_intra_dec_fixed rank %d com_size %d",
         ompi_comm_rank(comm), communicator_size));
 
-    int faninout = 2;
-    return ompi_coll_tuned_allgather_intra_do_this(sbuf, scount, sdtype,
-                                                   rbuf, rcount, rdtype,
-                                                   comm, module, alg, faninout, 0);
+    {
+        mca_allocator_base_module_t *allocator = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+        int faninout = 2;
+        return ompi_coll_tuned_allgather_intra_do_this(sbuf, scount, sdtype,
+                                                       rbuf, rcount, rdtype,
+                                                       comm, module, alg, faninout, 0,
+                                                       allocator);
+    }
 }
 
 /*
@@ -1720,10 +1756,20 @@ int ompi_coll_tuned_gather_intra_dec_fixed(const void *sbuf, size_t scount,
         alg = 2;
     }
 
-    return ompi_coll_tuned_gather_intra_do_this (sbuf, scount, sdtype,
-                                                 rbuf, rcount, rdtype,
-                                                 root, comm, module,
-                                                 alg, 0, 0);
+    {
+        mca_allocator_base_module_t *allocator = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+        return ompi_coll_tuned_gather_intra_do_this(sbuf, scount, sdtype,
+                                                    rbuf, rcount, rdtype,
+                                                    root, comm, module,
+                                                    alg, 0, 0, allocator);
+    }
 }
 
 /*
@@ -1825,8 +1871,18 @@ int ompi_coll_tuned_scatter_intra_dec_fixed(const void *sbuf, size_t scount,
         }
     }
 
-    return ompi_coll_tuned_scatter_intra_do_this (sbuf, scount, sdtype,
-                                                  rbuf, rcount, rdtype,
-                                                  root, comm, module,
-                                                  alg, 0, 0);
+    {
+        mca_allocator_base_module_t *allocator = NULL;
+        int _dev_id = MCA_ACCELERATOR_NO_DEVICE_ID;
+        uint64_t _flags;
+        if ((sbuf != MPI_IN_PLACE &&
+             opal_accelerator.check_addr(sbuf, &_dev_id, &_flags) > 0) ||
+            opal_accelerator.check_addr(rbuf, &_dev_id, &_flags) > 0) {
+            allocator = opal_accelerator_base_get_device_allocator(_dev_id);
+        }
+        return ompi_coll_tuned_scatter_intra_do_this(sbuf, scount, sdtype,
+                                                     rbuf, rcount, rdtype,
+                                                     root, comm, module,
+                                                     alg, 0, 0, allocator);
+    }
 }

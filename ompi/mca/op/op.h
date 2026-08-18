@@ -326,6 +326,44 @@ typedef struct ompi_op_base_module_1_0_0_t *
   (*ompi_op_base_component_op_query_1_0_0_fn_t)
     (struct ompi_op_t *op, int *priority);
 
+/* Forward declarations for GPU types (defined in ompi/op/op_gpu_session.h) */
+struct ompi_op_gpu_cmd_queue_t;
+struct ompi_op_gpu_session_t;
+
+/**
+ * Optional component hook: allocate the expensive GPU resources for a
+ * cmd_queue on the given device: managed-memory command slot, shutdown flag,
+ * and a private GPU stream.  Returns NULL on allocation failure.
+ * The caller (op_gpu_session.c) wires session_begin_fn and free_fn.
+ */
+typedef struct ompi_op_gpu_cmd_queue_t *
+  (*ompi_op_base_component_cmd_queue_alloc_fn_t)(int dev_id);
+
+/**
+ * Optional component hook: look up the GPU kernel for (op, dtype), reset the
+ * cmd_queue state, and launch the persistent kernel on the queue's stream.
+ * Returns a fully-wired ompi_op_gpu_session_t on success, NULL if no GPU
+ * kernel exists for this (op, dtype) combination.
+ */
+typedef struct ompi_op_gpu_session_t *
+  (*ompi_op_base_component_session_begin_fn_t)(struct ompi_op_gpu_cmd_queue_t *queue,
+                                               struct ompi_op_t *op,
+                                               struct ompi_datatype_t *dtype);
+
+/**
+ * Optional component hook: report the device's memory bandwidth and its
+ * host<->device link bandwidth (both in bytes/sec), used to analytically
+ * estimate a device-vs-host reduction crossover size. Returns OMPI_SUCCESS
+ * with both outputs set, or an error if either could not be determined
+ * (e.g. no accelerator present, or the link topology couldn't be queried) --
+ * callers must treat a non-success return as "estimate unavailable" and fall
+ * back to a fixed default rather than trusting partially-filled outputs.
+ */
+typedef int
+  (*ompi_op_base_component_query_bandwidth_fn_t)(int dev_id,
+                                                  double *device_bw_bytes_per_sec,
+                                                  double *link_bw_bytes_per_sec);
+
 /**
  * Op component interface.
  *
@@ -343,6 +381,14 @@ typedef struct ompi_op_base_component_1_0_0_t {
     ompi_op_base_component_init_query_fn_t opc_init_query;
     /** Query whether component is usable for given op */
     ompi_op_base_component_op_query_1_0_0_fn_t opc_op_query;
+
+    /** Optional: GPU cmd_queue and session hooks.  NULL in host-only components. */
+    ompi_op_base_component_cmd_queue_alloc_fn_t  opc_cmd_queue_alloc;
+    ompi_op_base_component_session_begin_fn_t    opc_session_begin;
+    /** Optional: device/link bandwidth query for threshold estimation. NULL
+     *  in host-only components (and may remain NULL in GPU components that
+     *  don't support it on a given platform). */
+    ompi_op_base_component_query_bandwidth_fn_t  opc_query_bandwidth;
 } ompi_op_base_component_1_0_0_t;
 
 

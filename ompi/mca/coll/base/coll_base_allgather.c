@@ -114,7 +114,7 @@ ompi_coll_base_allgather_intra_recursivedoubling(const void *sbuf, size_t scount
         int k = 2;
         return ompi_coll_base_allgather_intra_k_bruck(sbuf, scount, sdtype,
                                                       rbuf, rcount, rdtype,
-                                                      comm, module, k);
+                                                      comm, module, k, NULL);
     }
 
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output,
@@ -771,7 +771,8 @@ int ompi_coll_base_allgather_intra_k_bruck(const void *sbuf, size_t scount,
                                           struct ompi_datatype_t *rdtype,
                                           struct ompi_communicator_t *comm,
                                           mca_coll_base_module_t *module,
-                                          int radix)
+                                          int radix,
+                                          mca_allocator_base_module_t *allocator)
 {
     int line = -1, rank, size, dst, src, err = MPI_SUCCESS;
     int recvcount, distance;
@@ -796,7 +797,7 @@ int ompi_coll_base_allgather_intra_k_bruck(const void *sbuf, size_t scount,
     if (0 != rank) {
         /* Compute the temporary buffer size, including datatypes empty gaps */
         rsize = opal_datatype_span(&rdtype->super, (size_t)rcount * (size - rank), &rgap);
-        tmp_buf = (char *) malloc(rsize);
+        tmp_buf = (char *) COLL_BASE_ALLOC(allocator, rsize);
         tmp_buf_start = tmp_buf - rgap;
     }
 
@@ -891,7 +892,7 @@ int ompi_coll_base_allgather_intra_k_bruck(const void *sbuf, size_t scount,
         if (MPI_SUCCESS != err) { line = __LINE__; goto err_hndl; }
     }
 
-    if(tmp_buf != NULL) free(tmp_buf);
+    if(tmp_buf != NULL) COLL_BASE_FREE(allocator, tmp_buf);
     return MPI_SUCCESS;
 
 err_hndl:
@@ -911,7 +912,7 @@ err_hndl:
     OPAL_OUTPUT((ompi_coll_base_framework.framework_output,  "%s:%4d\tError occurred %d, rank %2d",
                  __FILE__, line, err, rank));
     if(tmp_buf != NULL) {
-        free(tmp_buf);
+        COLL_BASE_FREE(allocator, tmp_buf);
         tmp_buf = NULL;
         tmp_buf_start = NULL;
     }

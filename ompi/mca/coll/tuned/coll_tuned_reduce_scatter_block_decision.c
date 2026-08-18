@@ -123,7 +123,8 @@ int ompi_coll_tuned_reduce_scatter_block_intra_do_this(const void *sbuf, void *r
                                                        struct ompi_op_t *op,
                                                        struct ompi_communicator_t *comm,
                                                        mca_coll_base_module_t *module,
-                                                       int algorithm, int faninout, int segsize)
+                                                       int algorithm, int faninout, int segsize,
+                                                       ompi_op_gpu_session_t *session)
 {
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_block_intra_do_this selected algorithm %d topo faninout %d segsize %d",
@@ -133,13 +134,16 @@ int ompi_coll_tuned_reduce_scatter_block_intra_do_this(const void *sbuf, void *r
     case (0): return ompi_coll_tuned_reduce_scatter_block_intra_dec_fixed(sbuf, rbuf, rcount,
                                                                           dtype, op, comm, module);
     case (1): return ompi_coll_base_reduce_scatter_block_basic_linear(sbuf, rbuf, rcount,
-                                                                      dtype, op, comm, module);
+                                                                      dtype, op, comm, module,
+                                                                      session);
     case (2): return ompi_coll_base_reduce_scatter_block_intra_recursivedoubling(sbuf, rbuf, rcount,
-                                                                                 dtype, op, comm, module);
+                                                                                 dtype, op, comm, module,
+                                                                                 session);
     case (3): return ompi_coll_base_reduce_scatter_block_intra_recursivehalving(sbuf, rbuf, rcount,
-                                                                                dtype, op, comm, module);
+                                                                                dtype, op, comm, module,
+                                                                                session);
     case (4): return ompi_coll_base_reduce_scatter_block_intra_butterfly(sbuf, rbuf, rcount, dtype, op, comm,
-                                                                         module);
+                                                                         module, session);
     } /* switch */
     OPAL_OUTPUT_VERBOSE((COLL_TUNED_TRACING_VERBOSE, ompi_coll_tuned_stream,
         "coll:tuned:reduce_scatter_block_intra_do_this attempt to select algorithm %d when only 0-%d is valid?",
