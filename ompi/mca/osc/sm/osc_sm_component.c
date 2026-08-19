@@ -212,21 +212,21 @@ static int osc_sm_reserved_notify_counters(opal_info_t *info, unsigned int *asse
 }
 
 
+/* Point notify_bases at the counters starting at counters_base, which holds
+ * every rank's counters back to back in rank order.  The capacities in
+ * node_states are identical in every MPI process, so each one lands on the same
+ * counter through its own mapping of the region. */
 void
-ompi_osc_sm_refresh_notify_bases(ompi_osc_sm_module_t *module)
+ompi_osc_sm_refresh_notify_bases(ompi_osc_sm_module_t *module,
+                                 opal_atomic_int64_t *counters_base)
 {
     int comm_size = ompi_comm_size(module->comm);
-    char *base;
+    opal_atomic_int64_t *base = counters_base;
     int i;
 
-    /* Once the counters have been grown they live in their own segment;
-     * before that they sit inline in the main one. */
-    base = (NULL != module->notify_segment_base) ? (char *) module->notify_segment_base
-                                                 : (char *) module->segment_base;
-
     for (i = 0 ; i < comm_size ; ++i) {
-        module->notify_bases[i] = (opal_atomic_int64_t *)
-            (base + module->node_states[i].notify_counter_offset);
+        module->notify_bases[i] = base;
+        base += module->node_states[i].notify_counter_capacity;
     }
 }
 
@@ -357,7 +357,6 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         if (NULL == module->notify_bases[0]) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
         module->node_states[0].notify_counter_capacity = notify_reserved;
         module->node_states[0].notify_counter_count = notify_reserved;
-        module->node_states[0].notify_counter_offset = 0;
     } else {
         unsigned long total, total_counters, gather_values[2], *rbuf;
         int i, flag;
@@ -491,17 +490,13 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         notify_counters_base = (opal_atomic_int64_t *) ((char *)(module->node_states + comm_size) +
                                    OPAL_ALIGN_PAD_AMOUNT((uintptr_t)(module->node_states + comm_size), 64));
 
-        for (i = 0, total = data_base_size, total_counters = 0 ; i < comm_size ; ++i) {
+        for (i = 0, total = data_base_size ; i < comm_size ; ++i) {
             if (i > 0) {
                 module->posts[i] = module->posts[i - 1] + post_size;
             }
 
             module->node_states[i].notify_counter_capacity = (uint32_t) rbuf[2 * i + 1];
             module->node_states[i].notify_counter_count = (uint32_t) rbuf[2 * i + 1];
-            module->node_states[i].notify_counter_offset =
-                (uint64_t) ((char *) (notify_counters_base + total_counters) -
-                            (char *) module->segment_base);
-            total_counters += rbuf[2 * i + 1];
 
             module->sizes[i] = rbuf[2 * i];
             if (module->sizes[i] || !module->noncontig) {
@@ -515,7 +510,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
             }
         }
 
-        ompi_osc_sm_refresh_notify_bases(module);
+        ompi_osc_sm_refresh_notify_bases(module, notify_counters_base);
 
         /* Zero only this process's own counters. */
         memset((void *) module->notify_bases[ompi_comm_rank(module->comm)], 0,

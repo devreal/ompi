@@ -55,7 +55,6 @@ struct ompi_osc_sm_node_state_t {
     opal_atomic_lock_t accumulate_lock;
     uint32_t notify_counter_count;
     uint32_t notify_counter_capacity;
-    uint64_t notify_counter_offset;
 };
 typedef struct ompi_osc_sm_node_state_t ompi_osc_sm_node_state_t;
 
@@ -93,6 +92,9 @@ struct ompi_osc_sm_module_t {
     void **bases;
     ptrdiff_t *disp_units;
 
+    /* Where each rank's notification counters live in this process's address
+     * space.  Recomputed from the capacities in node_states whenever the
+     * counters are (re)placed; nothing about their location is shared. */
     opal_atomic_int64_t **notify_bases;
     opal_shmem_ds_t notify_seg_ds;
     void *notify_segment_base;
@@ -124,7 +126,8 @@ int ompi_osc_sm_detach(struct ompi_win_t *win, const void *base);
 
 int ompi_osc_sm_free(struct ompi_win_t *win);
 
-void ompi_osc_sm_refresh_notify_bases(ompi_osc_sm_module_t *module);
+void ompi_osc_sm_refresh_notify_bases(ompi_osc_sm_module_t *module,
+                                      opal_atomic_int64_t *counters_base);
 
 
 int ompi_osc_sm_put(const void *origin_addr,

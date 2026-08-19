@@ -163,17 +163,14 @@ osc_sm_grow_notify_counters(ompi_osc_sm_module_t *module, const unsigned long *n
     module->notify_segment_base = new_base;
     module->notify_seg_ds = new_seg_ds;
 
-    /* Republish the layout.  Every MPI process computes the same offsets from
-     * the same new_caps, so these stores are identical everywhere; node_states
-     * lives in the main segment, which does not move. */
-    total_counters = 0;
+    /* Republish the capacities.  Every MPI process stores the same new_caps, so
+     * these stores are identical everywhere; node_states lives in the main
+     * segment, which does not move. */
     for (i = 0 ; i < comm_size ; ++i) {
         module->node_states[i].notify_counter_capacity = (uint32_t) new_caps[i];
-        module->node_states[i].notify_counter_offset = total_counters * sizeof(int64_t);
-        total_counters += new_caps[i];
     }
 
-    ompi_osc_sm_refresh_notify_bases(module);
+    ompi_osc_sm_refresh_notify_bases(module, new_base);
 
     memset((void *) module->notify_bases[rank], 0,
            module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
