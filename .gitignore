@@ -440,6 +440,7 @@ test/simple/iof
 test/simple/no-disconnect
 test/simple/nonzero
 test/simple/add_host
+test/simple/win_notify_multi
 
 oshmem/include/shmem.h
 oshmem/include/shmem_portable_platform.h
