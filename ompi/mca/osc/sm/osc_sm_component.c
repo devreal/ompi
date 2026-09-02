@@ -32,6 +32,7 @@
 #include "opal/util/sys_limits.h"
 #include "opal/align.h"
 #include "opal/util/info.h"
+#include "opal/util/info_subscriber.h"
 #include "opal/util/printf.h"
 #include "opal/class/opal_cstring.h"
 #include "opal/mca/mpool/base/base.h"
@@ -48,6 +49,8 @@ static int component_register (void);
 static int component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t disp_unit,
                             struct ompi_communicator_t *comm, struct opal_info_t *info,
                             int flavor, int *model);
+static const char *osc_sm_notify_assert_info(opal_infosubscriber_t *obj, const char *key,
+                                            const char *value);
 
 ompi_osc_sm_component_t mca_osc_sm_component = {
     { /* ompi_osc_base_component_t */
@@ -212,6 +215,23 @@ static int osc_sm_reserved_notify_counters(opal_info_t *info, unsigned int *asse
 }
 
 
+/* Report the mpi_assert_max_num_notify actually in effect on the window.  The
+ * counter reservation is fixed when the window is created, so a value handed to
+ * MPI_Win_set_info afterwards cannot change it and is deliberately ignored --
+ * returning our own value leaves MPI_Win_get_info describing what osc/sm really
+ * enforces rather than what was last asked for. */
+static const char *
+osc_sm_notify_assert_info(opal_infosubscriber_t *obj,
+                          const char *key __opal_attribute_unused__,
+                          const char *value __opal_attribute_unused__)
+{
+    struct ompi_win_t *win = (struct ompi_win_t *) obj;
+    ompi_osc_sm_module_t *module = (ompi_osc_sm_module_t *) win->w_osc_module;
+
+    return module->notify_max_assert_str;
+}
+
+
 /* Point notify_bases at the counters starting at counters_base, which holds
  * every rank's counters back to back in rank order.  The capacities in
  * node_states are identical in every MPI process, so each one lands on the same
@@ -326,7 +346,15 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
     ret = osc_sm_reserved_notify_counters(info, &notify_assert, &notify_reserved);
     if (OMPI_SUCCESS != ret) goto error;
     module->notify_max_assert = notify_assert;
+    snprintf(module->notify_max_assert_str, sizeof(module->notify_max_assert_str), "%u",
+             notify_assert);
     module->notify_segment_base = NULL;
+
+    /* Publish the assertion through the window's info subscriber, which owns
+     * what MPI_Win_get_info reports and re-runs the callback on every
+     * MPI_Win_set_info. */
+    opal_infosubscribe_subscribe(&win->super, "mpi_assert_max_num_notify", "0",
+                                 osc_sm_notify_assert_info);
 
     module->notify_bases = calloc(comm_size, sizeof(module->notify_bases[0]));
     if (NULL == module->notify_bases) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
@@ -741,13 +769,6 @@ ompi_osc_sm_get_info(struct ompi_win_t *win, struct opal_info_t **info_used)
                       (1 == module->global_state->use_barrier_for_fence) ? "true" : "false");
         opal_info_set(info, "alloc_shared_noncontig",
                       (module->noncontig) ? "true" : "false");
-    }
-
-    /* Report the assertion back only when one was actually given. */
-    if (0 != module->notify_max_assert) {
-        char value_str[16];
-        snprintf(value_str, sizeof(value_str), "%u", module->notify_max_assert);
-        opal_info_set(info, "mpi_assert_max_num_notify", value_str);
     }
 
     *info_used = info;

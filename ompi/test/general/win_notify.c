@@ -51,6 +51,7 @@ static void test_notify_idx_errors(void);
 static void test_counter_growth(void);
 static void test_max_num_notify_assertion(void);
 static void test_notify_attributes(void);
+static void test_notify_info_reporting(void);
 
 /* Read notification counter "idx" and check it against "expect". */
 static void check_counter(MPI_Win win, int idx, MPI_Count expect,
@@ -59,6 +60,21 @@ static void check_counter(MPI_Win win, int idx, MPI_Count expect,
     MPI_Count value = -1;
     int rc = MPI_Win_get_notify_value(win, idx, &value);
     test_verify(what, MPI_SUCCESS == rc && expect == value);
+}
+
+/* Read "key" out of the window's info, or leave "buf" empty if absent. */
+static void get_win_info_value(MPI_Win win, const char *key, char *buf, int buflen)
+{
+    MPI_Info used = MPI_INFO_NULL;
+    int flag = 0;
+
+    buf[0] = '\0';
+    MPI_Win_get_info(win, &used);
+    MPI_Info_get_string(used, key, &buflen, buf, &flag);
+    if (!flag) {
+        buf[0] = '\0';
+    }
+    MPI_Info_free(&used);
 }
 
 int main(int argc, char *argv[])
@@ -78,6 +94,7 @@ int main(int argc, char *argv[])
     test_counter_growth();
     test_max_num_notify_assertion();
     test_notify_attributes();
+    test_notify_info_reporting();
 
     int r = test_finalize();
     MPI_Finalize();
@@ -589,6 +606,78 @@ static void test_notify_attributes(void)
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_NUM_SB, &num_sb, &flag);
     test_verify("NUM_SB reports the asserted maximum",
                 MPI_SUCCESS == rc && flag && 8 == *num_sb);
+
+    MPI_Win_free(&win);
+}
+
+/* ------------------------------------------------------------------ */
+
+/* The window reports mpi_assert_max_num_notify through its info subscriber,
+ * so MPI_Win_get_info describes the assertion osc/sm is actually enforcing.
+ * The counter reservation is fixed when the window is created, so an
+ * assertion handed to MPI_Win_set_info afterwards cannot take effect and must
+ * not be reported as though it had. */
+static void test_notify_info_reporting(void)
+{
+    int *base = NULL;
+    MPI_Win win = MPI_WIN_NULL;
+    MPI_Info info = MPI_INFO_NULL;
+    char value[32];
+    int rc;
+
+    /* No assertion: the key still reports, as the 0 that means "none". */
+    rc = MPI_Win_allocate(WIN_COUNT * sizeof(int), sizeof(int), MPI_INFO_NULL,
+                          MPI_COMM_SELF, &base, &win);
+    test_verify("Win_allocate succeeds (info reporting)", MPI_SUCCESS == rc);
+    MPI_Win_set_errhandler(win, MPI_ERRORS_RETURN);
+
+    get_win_info_value(win, "mpi_assert_max_num_notify", value, sizeof(value));
+    test_verify("no assertion is reported as 0", 0 == strcmp(value, "0"));
+
+    MPI_Info_create(&info);
+    MPI_Info_set(info, "mpi_assert_max_num_notify", "1000");
+    rc = MPI_Win_set_info(win, info);
+    test_verify("Win_set_info succeeds (no assertion)", MPI_SUCCESS == rc);
+    MPI_Info_free(&info);
+
+    get_win_info_value(win, "mpi_assert_max_num_notify", value, sizeof(value));
+    test_verify("Win_set_info cannot invent an assertion",
+                0 == strcmp(value, "0"));
+
+    /* Growth is still allowed: no assertion was ever really made. */
+    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, NUM_NOTIFY_GROWN);
+    test_verify("growth still allowed after a rejected assertion",
+                MPI_SUCCESS == rc);
+
+    MPI_Win_free(&win);
+
+    /* With an assertion, that value is what gets reported. */
+    MPI_Info_create(&info);
+    MPI_Info_set(info, "mpi_assert_max_num_notify", "8");
+    rc = MPI_Win_allocate(WIN_COUNT * sizeof(int), sizeof(int), info,
+                          MPI_COMM_SELF, &base, &win);
+    test_verify("Win_allocate succeeds (asserted info reporting)",
+                MPI_SUCCESS == rc);
+    MPI_Info_free(&info);
+    MPI_Win_set_errhandler(win, MPI_ERRORS_RETURN);
+
+    get_win_info_value(win, "mpi_assert_max_num_notify", value, sizeof(value));
+    test_verify("the assertion is reported back", 0 == strcmp(value, "8"));
+
+    MPI_Info_create(&info);
+    MPI_Info_set(info, "mpi_assert_max_num_notify", "1000");
+    rc = MPI_Win_set_info(win, info);
+    test_verify("Win_set_info succeeds (asserted)", MPI_SUCCESS == rc);
+    MPI_Info_free(&info);
+
+    get_win_info_value(win, "mpi_assert_max_num_notify", value, sizeof(value));
+    test_verify("Win_set_info cannot raise the assertion",
+                0 == strcmp(value, "8"));
+
+    /* And the cap the window was sized for is still the one enforced. */
+    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 9);
+    test_verify("the original assertion still caps set_num_notify",
+                MPI_ERR_ARG == rc);
 
     MPI_Win_free(&win);
 }

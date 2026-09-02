@@ -99,6 +99,9 @@ struct ompi_osc_sm_module_t {
     opal_shmem_ds_t notify_seg_ds;
     void *notify_segment_base;
     unsigned int notify_max_assert;
+    /* notify_max_assert rendered for the window's info; the info subscriber
+     * hands this back, so it must outlive the callback that returns it. */
+    char notify_max_assert_str[16];
 
 
     ompi_group_t *start_group;
