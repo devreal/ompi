@@ -91,8 +91,6 @@ struct ompi_osc_sm_module_t {
     size_t *sizes;
     void **bases;
     ptrdiff_t *disp_units;
-    uint64_t **notify_counters;
-
 
     /* Where each rank's notification counters live in this process's address
      * space.  Recomputed from the capacities in node_states whenever the
