@@ -37,6 +37,9 @@
 
 #include <mpi.h>
 
+/* Minimum window size in ints.  test_collective_growth() has every rank
+ * write to the slot named by its own rank, so a window must hold at least
+ * one int per rank; win_elems carries that once the job size is known. */
 #define WIN_COUNT 8
 
 /* Comfortably more than the osc_sm_num_notify_counters default of 16, so
@@ -48,7 +51,7 @@
  * see it; the bound only keeps a broken build from hanging the test. */
 #define MAX_SPINS 100000000L
 
-static int rank, nprocs, failures;
+static int rank, nprocs, failures, win_elems;
 
 static void check(const char *what, int ok)
 {
@@ -96,7 +99,7 @@ static MPI_Win make_window(MPI_Info info, int **base)
     MPI_Win win = MPI_WIN_NULL;
     int rc;
 
-    rc = MPI_Win_allocate_shared(WIN_COUNT * sizeof(int), sizeof(int), info,
+    rc = MPI_Win_allocate_shared(win_elems * sizeof(int), sizeof(int), info,
                                  MPI_COMM_WORLD, base, &win);
     check("Win_allocate_shared succeeds", MPI_SUCCESS == rc);
     if (MPI_SUCCESS != rc) {
@@ -104,7 +107,7 @@ static MPI_Win make_window(MPI_Info info, int **base)
     }
 
     MPI_Win_set_errhandler(win, MPI_ERRORS_RETURN);
-    memset(*base, 0, WIN_COUNT * sizeof(int));
+    memset(*base, 0, win_elems * sizeof(int));
     MPI_Barrier(MPI_COMM_WORLD);
 
     return win;
@@ -363,6 +366,13 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
+    /* An error creating a window is raised on the communicator, not on the
+     * window that does not exist yet, so the skips below are only reachable
+     * if the communicator returns rather than aborts. */
+    MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
+
+    win_elems = (nprocs > WIN_COUNT) ? nprocs : WIN_COUNT;
+
     if (nprocs < 2) {
         if (0 == rank) {
             fprintf(stderr, "win_notify_multi needs at least 2 ranks "
@@ -373,7 +383,7 @@ int main(int argc, char *argv[])
     }
 
     /* Nothing below means anything on a component without notified RMA. */
-    rc = MPI_Win_allocate_shared(WIN_COUNT * sizeof(int), sizeof(int),
+    rc = MPI_Win_allocate_shared(win_elems * sizeof(int), sizeof(int),
                                  MPI_INFO_NULL, MPI_COMM_WORLD, &base, &win);
     if (MPI_SUCCESS != rc) {
         if (0 == rank) {
