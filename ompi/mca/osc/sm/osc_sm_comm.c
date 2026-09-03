@@ -46,7 +46,12 @@ osc_sm_check_notify_idx(ompi_osc_sm_module_t *module, int target, int notify)
 static inline void
 osc_sm_notify_accumulate_done(ompi_osc_sm_module_t *module, int target, int notify)
 {
-    opal_atomic_mb();
+    /* Release ordering: the preceding read and/or write of the target's window
+     * (get_accumulate's fetch, or the accumulate itself) must be ordered before
+     * the counter store below.  A release fence covers that -- it is a
+     * load/store-then-store barrier, not merely store-then-store -- so it is
+     * sufficient here even for MPI_NO_OP, which only reads. */
+    opal_atomic_wmb();
     opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
 }
 
@@ -498,7 +503,10 @@ ompi_osc_sm_rget_notify(void *origin_addr,
         return ret;
     }
 
-    opal_atomic_mb();
+    /* Release ordering: the preceding read of the target's window must be
+     * ordered before the counter store below.  A release fence covers that --
+     * it is a load/store-then-store barrier, not merely store-then-store. */
+    opal_atomic_wmb();
     opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
 
     /* the only valid field of RMA request status is the MPI_ERROR field.
@@ -891,8 +899,10 @@ ompi_osc_sm_get_notify(void *origin_addr,
         return ret;
     }
 
-    /* Full barrier, not opal_atomic_rmb(): see ompi_osc_sm_rget_notify(). */
-    opal_atomic_mb();
+    /* Release ordering: the preceding read of the target's window must be
+     * ordered before the counter store below.  A release fence covers that --
+     * it is a load/store-then-store barrier, not merely store-then-store. */
+    opal_atomic_wmb();
     opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
 
     return ret;
