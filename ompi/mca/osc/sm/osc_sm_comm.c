@@ -46,12 +46,16 @@ osc_sm_check_notify_idx(ompi_osc_sm_module_t *module, int target, int notify)
 static inline void
 osc_sm_notify_accumulate_done(ompi_osc_sm_module_t *module, int target, int notify)
 {
-    /* Release ordering: the preceding read and/or write of the target's window
-     * (get_accumulate's fetch, or the accumulate itself) must be ordered before
-     * the counter store below.  A release fence covers that -- it is a
-     * load/store-then-store barrier, not merely store-then-store -- so it is
-     * sufficient here even for MPI_NO_OP, which only reads. */
-    opal_atomic_wmb();
+    /* No barrier here: every caller reaches this immediately after releasing
+     * module->node_states[target].accumulate_lock (possibly past an
+     * intervening error check that returns before calling this at all), and
+     * opal_atomic_unlock() already issues a release fence.  That fence orders
+     * the accumulate's preceding read and/or write against this counter store
+     * exactly as a fence placed here would -- release ordering applies to
+     * everything sequenced after it, not only the next instruction -- and
+     * opal_atomic_add() itself is relaxed and adds none of its own.  A caller
+     * that reaches this counter store without having just unlocked that lock
+     * would need its own barrier instead. */
     opal_atomic_add(&osc_sm_target_notify_base(module, target)[notify], 1);
 }
 
