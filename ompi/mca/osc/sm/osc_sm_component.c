@@ -31,7 +31,10 @@
 #include "ompi/request/request.h"
 #include "opal/util/sys_limits.h"
 #include "opal/align.h"
+#include "opal/util/info.h"
+#include "opal/util/info_subscriber.h"
 #include "opal/util/printf.h"
+#include "opal/class/opal_cstring.h"
 #include "opal/mca/mpool/base/base.h"
 
 #include "osc_sm.h"
@@ -46,6 +49,8 @@ static int component_register (void);
 static int component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t disp_unit,
                             struct ompi_communicator_t *comm, struct opal_info_t *info,
                             int flavor, int *model);
+static const char *osc_sm_notify_assert_info(opal_infosubscriber_t *obj, const char *key,
+                                            const char *value);
 
 ompi_osc_sm_component_t mca_osc_sm_component = {
     { /* ompi_osc_base_component_t */
@@ -70,8 +75,6 @@ ompi_osc_sm_component_t mca_osc_sm_component = {
 MCA_BASE_COMPONENT_INIT(ompi, osc, sm)
 
 
-// TODO: extend the struct and add pointers to put/get_with_notify functions
-// TODO: extend it to rput/rget_with_notify as well
 ompi_osc_sm_module_t ompi_osc_sm_module_template = {
     {
         .osc_win_shared_query = ompi_osc_sm_shared_query,
@@ -81,16 +84,29 @@ ompi_osc_sm_module_t ompi_osc_sm_module_template = {
         .osc_free = ompi_osc_sm_free,
 
         .osc_put = ompi_osc_sm_put,
+        .osc_put_notify = ompi_osc_sm_put_notify,
         .osc_get = ompi_osc_sm_get,
+        .osc_get_notify = ompi_osc_sm_get_notify,
+        .osc_win_get_notify_value = ompi_osc_sm_win_get_notify_value,
+        .osc_win_reset_notify_value = ompi_osc_sm_win_reset_notify_value,
+        .osc_win_set_num_notify = ompi_osc_sm_win_set_num_notify,
+        .osc_win_get_num_notify = ompi_osc_sm_win_get_num_notify,
+        .osc_win_get_notify_bounds = ompi_osc_sm_win_get_notify_bounds,
         .osc_accumulate = ompi_osc_sm_accumulate,
+        .osc_accumulate_notify = ompi_osc_sm_accumulate_notify,
         .osc_compare_and_swap = ompi_osc_sm_compare_and_swap,
         .osc_fetch_and_op = ompi_osc_sm_fetch_and_op,
         .osc_get_accumulate = ompi_osc_sm_get_accumulate,
+        .osc_get_accumulate_notify = ompi_osc_sm_get_accumulate_notify,
 
         .osc_rput = ompi_osc_sm_rput,
+        .osc_rput_notify = ompi_osc_sm_rput_notify,
         .osc_rget = ompi_osc_sm_rget,
+        .osc_rget_notify = ompi_osc_sm_rget_notify,
         .osc_raccumulate = ompi_osc_sm_raccumulate,
+        .osc_raccumulate_notify = ompi_osc_sm_raccumulate_notify,
         .osc_rget_accumulate = ompi_osc_sm_rget_accumulate,
+        .osc_rget_accumulate_notify = ompi_osc_sm_rget_accumulate_notify,
 
         .osc_fence = ompi_osc_sm_fence,
 
@@ -140,7 +156,98 @@ static int component_register (void)
                                           &mca_osc_sm_component.priority);
     free(description_str);
 
+    mca_osc_sm_component.num_notify_counters = OSC_SM_DEFAULT_NOTIFY_COUNTERS;
+    opal_asprintf(&description_str,
+                  "Number of RMA notification counters reserved per MPI process "
+                  "in the shared memory segment of each window.  Windows whose "
+                  "info gives an mpi_assert_max_num_notify value use that "
+                  "instead.  MPI_Win_set_num_notify may exceed this value, at "
+                  "the cost of allocating a new shared segment (default: %u)",
+                  mca_osc_sm_component.num_notify_counters);
+    (void) mca_base_component_var_register(&mca_osc_sm_component.super.osc_version,
+                                           "num_notify_counters", description_str,
+                                           MCA_BASE_VAR_TYPE_UNSIGNED_INT, NULL, 0, 0,
+                                           OPAL_INFO_LVL_3, MCA_BASE_VAR_SCOPE_GROUP,
+                                           &mca_osc_sm_component.num_notify_counters);
+    free(description_str);
+
     return OPAL_SUCCESS;
+}
+
+
+/* Read the mpi_assert_max_num_notify info key (MPI-5.1 section 12.2). */
+static int osc_sm_reserved_notify_counters(opal_info_t *info, unsigned int *assert_value,
+                                           unsigned int *reserved)
+{
+    opal_cstring_t *value_string;
+    int flag = 0, value = 0;
+
+    *assert_value = 0;
+    *reserved = mca_osc_sm_component.num_notify_counters;
+
+    if (NULL == info) {
+        return OMPI_SUCCESS;
+    }
+
+    if (OMPI_SUCCESS != opal_info_get(info, "mpi_assert_max_num_notify",
+                                      &value_string, &flag) || !flag) {
+        return OMPI_SUCCESS;
+    }
+
+    if (OPAL_SUCCESS != opal_cstring_to_int(value_string, &value)) {
+        OBJ_RELEASE(value_string);
+        return MPI_ERR_INFO;
+    }
+    OBJ_RELEASE(value_string);
+
+    /* A negative value is a malformed key rather than "no assertion"; only 0
+     * carries the "assume nothing" meaning. */
+    if (value < 0) {
+        return MPI_ERR_INFO;
+    }
+
+    if (0 != value) {
+        *assert_value = (unsigned int) value;
+        *reserved = (unsigned int) value;
+    }
+
+    return OMPI_SUCCESS;
+}
+
+
+/* Report the mpi_assert_max_num_notify actually in effect on the window.  The
+ * counter reservation is fixed when the window is created, so a value handed to
+ * MPI_Win_set_info afterwards cannot change it and is deliberately ignored --
+ * returning our own value leaves MPI_Win_get_info describing the reservation
+ * osc/sm really made rather than what was last asked for. */
+static const char *
+osc_sm_notify_assert_info(opal_infosubscriber_t *obj,
+                          const char *key __opal_attribute_unused__,
+                          const char *value __opal_attribute_unused__)
+{
+    struct ompi_win_t *win = (struct ompi_win_t *) obj;
+    ompi_osc_sm_module_t *module = (ompi_osc_sm_module_t *) win->w_osc_module;
+
+    return module->notify_max_assert_str;
+}
+
+
+/* Point notify_bases at the counters starting at counters_base, which holds
+ * every rank's counters back to back in rank order.  The capacities in
+ * node_states are identical in every MPI process, so each one lands on the same
+ * counter through its own mapping of the region. */
+void
+ompi_osc_sm_refresh_notify_bases(ompi_osc_sm_module_t *module,
+                                 opal_atomic_int64_t *counters_base)
+{
+    int comm_size = ompi_comm_size(module->comm);
+    opal_atomic_int64_t *base = counters_base;
+    int i;
+
+    for (i = 0 ; i < comm_size ; ++i) {
+        module->notify_bases[i] = base;
+        base += module->node_states[i].notify_counter_capacity;
+    }
 }
 
 static int
@@ -203,6 +310,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
     bool unlink_needed = false;
     int ret = OMPI_ERROR;
     size_t memory_alignment = OPAL_ALIGN_MIN;
+    unsigned int notify_assert = 0, notify_reserved = 0;
 
     assert(MPI_WIN_FLAVOR_SHARED == flavor || MPI_WIN_FLAVOR_ALLOCATE == flavor);
 
@@ -233,6 +341,24 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
 
     module->flavor = flavor;
 
+    /* How many notification counters to reserve per MPI process.  Read before
+     * the segment is sized, since the reservation is part of its layout. */
+    ret = osc_sm_reserved_notify_counters(info, &notify_assert, &notify_reserved);
+    if (OMPI_SUCCESS != ret) goto error;
+    module->notify_max_assert = notify_assert;
+    snprintf(module->notify_max_assert_str, sizeof(module->notify_max_assert_str), "%u",
+             notify_assert);
+    module->notify_segment_base = NULL;
+
+    /* Publish the assertion through the window's info subscriber, which owns
+     * what MPI_Win_get_info reports and re-runs the callback on every
+     * MPI_Win_set_info. */
+    opal_infosubscribe_subscribe(&win->super, "mpi_assert_max_num_notify", "0",
+                                 osc_sm_notify_assert_info);
+
+    module->notify_bases = calloc(comm_size, sizeof(module->notify_bases[0]));
+    if (NULL == module->notify_bases) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
+
     /* create the segment */
     if (1 == comm_size) {
         module->segment_base = NULL;
@@ -253,13 +379,21 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->posts = calloc (1, sizeof(module->posts[0]) + sizeof (module->posts[0][0]));
         if (NULL == module->posts) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
         module->posts[0] = (osc_sm_post_atomic_type_t *) (module->posts + 1);
+
+        /* Notification counters for the single process case. */
+        module->notify_bases[0] = calloc(notify_reserved, sizeof(int64_t));
+        if (NULL == module->notify_bases[0]) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
+        module->node_states[0].notify_counter_capacity = notify_reserved;
+        module->node_states[0].notify_counter_count = notify_reserved;
     } else {
-        unsigned long total, *rbuf;
+        unsigned long total, total_counters, gather_values[2], *rbuf;
         int i, flag;
         size_t pagesize;
         size_t state_size;
         size_t posts_size, post_size = (comm_size + OSC_SM_POST_MASK) / (OSC_SM_POST_MASK + 1);
+        size_t notify_counters_size;
         size_t data_base_size;
+        opal_atomic_int64_t *notify_counters_base;
 
         opal_output_verbose(MCA_BASE_VERBOSE_DEBUG, ompi_osc_base_framework.framework_output,
                             "allocating shared memory region of size %ld\n", (long) size);
@@ -267,7 +401,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         /* get the pagesize */
         pagesize = opal_getpagesize();
 
-        rbuf = malloc(sizeof(unsigned long) * comm_size);
+        rbuf = malloc(sizeof(unsigned long) * comm_size * 2 );
         if (NULL == rbuf) return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
 
         /* Note that the alloc_shared_noncontig info key only has
@@ -291,9 +425,10 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
                                 "allocating window using contiguous strategy");
         }
 
-        total = size;
-        ret = module->comm->c_coll->coll_allgather(&total, 1, MPI_UNSIGNED_LONG,
-                                                  rbuf, 1, MPI_UNSIGNED_LONG,
+        gather_values[0] = size;
+        gather_values[1] = notify_reserved;
+        ret = module->comm->c_coll->coll_allgather(gather_values, 2, MPI_UNSIGNED_LONG,
+                                                  rbuf, 2, MPI_UNSIGNED_LONG,
                                                   module->comm,
                                                   module->comm->c_coll->coll_allgather_module);
         if (OMPI_SUCCESS != ret) {
@@ -302,8 +437,10 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         }
 
         total = 0;
+        total_counters = 0;
         for (i = 0 ; i < comm_size ; ++i) {
-            total += rbuf[i];
+            total += rbuf[2 * i];
+            total_counters += rbuf[2 * i + 1];
             if (module->noncontig) {
                 total += OPAL_ALIGN_PAD_AMOUNT(total, pagesize);
             }
@@ -314,7 +451,9 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         state_size += OPAL_ALIGN_PAD_AMOUNT(state_size, 64);
         posts_size = comm_size * post_size * sizeof (module->posts[0][0]);
         posts_size += OPAL_ALIGN_PAD_AMOUNT(posts_size, 64);
-        data_base_size = state_size + posts_size;
+        notify_counters_size = total_counters * sizeof(uint64_t);
+        notify_counters_size += OPAL_ALIGN_PAD_AMOUNT(notify_counters_size, 64);
+        data_base_size = state_size + posts_size + notify_counters_size;
         data_base_size += OPAL_ALIGN_PAD_AMOUNT(data_base_size, pagesize);
         if (0 == ompi_comm_rank (module->comm)) {
             char *data_file;
@@ -375,15 +514,22 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         module->global_state = (ompi_osc_sm_global_state_t *) (module->posts[0] + comm_size * post_size);
         module->node_states = (ompi_osc_sm_node_state_t *) (module->global_state + 1);
 
+        /* set up notify counters in shared memory after node_states */
+        notify_counters_base = (opal_atomic_int64_t *) ((char *)(module->node_states + comm_size) +
+                                   OPAL_ALIGN_PAD_AMOUNT((uintptr_t)(module->node_states + comm_size), 64));
+
         for (i = 0, total = data_base_size ; i < comm_size ; ++i) {
             if (i > 0) {
                 module->posts[i] = module->posts[i - 1] + post_size;
             }
 
-            module->sizes[i] = rbuf[i];
+            module->node_states[i].notify_counter_capacity = (uint32_t) rbuf[2 * i + 1];
+            module->node_states[i].notify_counter_count = (uint32_t) rbuf[2 * i + 1];
+
+            module->sizes[i] = rbuf[2 * i];
             if (module->sizes[i] || !module->noncontig) {
                 module->bases[i] = ((char *) module->segment_base) + total;
-                total += rbuf[i];
+                total += rbuf[2 * i];
                 if (module->noncontig) {
                     total += OPAL_ALIGN_PAD_AMOUNT(total, pagesize);
                 }
@@ -392,12 +538,19 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
             }
         }
 
+        ompi_osc_sm_refresh_notify_bases(module, notify_counters_base);
+
+        /* Zero only this process's own counters. */
+        memset((void *) module->notify_bases[ompi_comm_rank(module->comm)], 0,
+               notify_reserved * sizeof(int64_t));
+
         free(rbuf);
     }
 
     /* initialize my state shared */
     module->my_node_state = &module->node_states[ompi_comm_rank(module->comm)];
-    memset (module->my_node_state, 0, sizeof(*module->my_node_state));
+    module->my_node_state->complete_count = 0;
+    memset (&module->my_node_state->lock, 0, sizeof(module->my_node_state->lock));
 
     *base = module->bases[ompi_comm_rank(module->comm)];
 
@@ -552,6 +705,10 @@ ompi_osc_sm_free(struct ompi_win_t *win)
         module->comm->c_coll->coll_barrier(module->comm,
                                           module->comm->c_coll->coll_barrier_module);
 
+        if (NULL != module->notify_segment_base) {
+            opal_shmem_segment_detach (&module->notify_seg_ds);
+        }
+
         opal_shmem_segment_detach (&module->seg_ds);
     } else {
         free(module->node_states);
@@ -560,7 +717,14 @@ ompi_osc_sm_free(struct ompi_win_t *win)
             mca_mpool_base_default_module->mpool_free(mca_mpool_base_default_module,
                                                       module->bases[0]);
         }
+        /* free the counters for the single process case */
+        /* cast away the atomic/volatile qualifier for free(), as in
+         * opal/runtime/opal_progress.c */
+        if (NULL != module->notify_bases) {
+            free((void *) module->notify_bases[0]);
+        }
     }
+    free(module->notify_bases);
     free(module->disp_units);
     free(module->outstanding_locks);
     free(module->sizes);
