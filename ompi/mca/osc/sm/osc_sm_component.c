@@ -218,8 +218,8 @@ static int osc_sm_reserved_notify_counters(opal_info_t *info, unsigned int *asse
 /* Report the mpi_assert_max_num_notify actually in effect on the window.  The
  * counter reservation is fixed when the window is created, so a value handed to
  * MPI_Win_set_info afterwards cannot change it and is deliberately ignored --
- * returning our own value leaves MPI_Win_get_info describing what osc/sm really
- * enforces rather than what was last asked for. */
+ * returning our own value leaves MPI_Win_get_info describing the reservation
+ * osc/sm really made rather than what was last asked for. */
 static const char *
 osc_sm_notify_assert_info(opal_infosubscriber_t *obj,
                           const char *key __opal_attribute_unused__,

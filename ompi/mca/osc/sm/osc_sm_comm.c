@@ -236,10 +236,11 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
         return MPI_ERR_ARG;
     }
 
-    if (0 != module->notify_max_assert &&
-        requested > (unsigned long) module->notify_max_assert) {
-        return MPI_ERR_ARG;
-    }
+    /* mpi_assert_max_num_notify is the user asserting what will be requested,
+     * not a limit on what osc/sm supports (MPI-5.1 section 12.2.3).  It sized
+     * the reservation made at window creation; a request above it is served
+     * exactly like one above the default reservation, by growing into a new
+     * shared segment. */
 
     memset((void *) module->notify_bases[rank], 0,
            module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
@@ -324,14 +325,23 @@ ompi_osc_sm_win_get_notify_bounds(struct ompi_win_t *win,
                                   OMPI_MPI_COUNT_TYPE *value_ub)
 {
     ompi_osc_sm_module_t *module = (ompi_osc_sm_module_t *) win->w_osc_module;
+    unsigned int reserved;
 
-    if (0 != module->notify_max_assert) {
-        *num_sb = (int) module->notify_max_assert;
-        *num_ub = (int) module->notify_max_assert;
-    } else {
-        *num_sb = (int) mca_osc_sm_component.num_notify_counters;
-        *num_ub = INT_MAX;
-    }
+    /* MPI-5.1 section 12.6.1: NUM_UB is the number of counters the
+     * implementation supports, NUM_SB the number it supports efficiently.
+     * osc/sm grows into a new shared segment on demand, so nothing short of
+     * memory bounds what may be attached, while the counters reserved in the
+     * window's segment at creation are what it serves without that
+     * reallocation.  mpi_assert_max_num_notify sizes that reservation, so it
+     * moves NUM_SB; it says nothing about what osc/sm supports, so it leaves
+     * NUM_UB alone. */
+    reserved = (0 != module->notify_max_assert)
+                   ? module->notify_max_assert
+                   : mca_osc_sm_component.num_notify_counters;
+
+    /* The attribute is an int, and num_notify_counters is not. */
+    *num_sb = (reserved > (unsigned int) INT_MAX) ? INT_MAX : (int) reserved;
+    *num_ub = INT_MAX;
 
     /* Counters are int64_t and only ever incremented by one per notified
      * operation, so the representable maximum is the real bound. */

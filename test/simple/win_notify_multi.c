@@ -319,8 +319,8 @@ static void test_info_and_attributes(void)
     MPI_Win_free(&win);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    /* With an assertion the window is sized for exactly that many, and the
-     * promise is held against every rank. */
+    /* With an assertion the window is sized for exactly that many at every
+     * rank, and growing past it stays collective. */
     MPI_Info_create(&info);
     MPI_Info_set(info, "mpi_assert_max_num_notify", "8");
     win = make_window(info, &base);
@@ -333,19 +333,22 @@ static void test_info_and_attributes(void)
     check("the assertion is reported back", 0 == strcmp(value, "8"));
 
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_NUM_SB, &num_sb, &flag);
-    check("NUM_SB collapses onto the assertion",
+    check("NUM_SB reports the asserted reservation",
           MPI_SUCCESS == rc && flag && 8 == *num_sb);
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_NUM_UB, &num_ub, &flag);
-    check("NUM_UB collapses onto the assertion",
-          MPI_SUCCESS == rc && flag && 8 == *num_ub);
+    check("NUM_UB stays unbounded under an assertion",
+          MPI_SUCCESS == rc && flag && INT_MAX == *num_ub);
 
     rc = MPI_Win_get_num_notify(win, (rank + 1) % nprocs, &num);
     check("a peer attached the asserted number of counters",
           MPI_SUCCESS == rc && 8 == num);
 
     rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 9);
-    check("Win_set_num_notify refuses to exceed the assertion",
-          MPI_ERR_ARG == rc);
+    check("Win_set_num_notify grows past the assertion", MPI_SUCCESS == rc);
+
+    rc = MPI_Win_get_num_notify(win, (rank + 1) % nprocs, &num);
+    check("a peer grew past the assertion too",
+          MPI_SUCCESS == rc && 9 == num);
 
     MPI_Win_free(&win);
     MPI_Barrier(MPI_COMM_WORLD);

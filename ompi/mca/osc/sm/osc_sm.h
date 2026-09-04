@@ -98,6 +98,9 @@ struct ompi_osc_sm_module_t {
     opal_atomic_int64_t **notify_bases;
     opal_shmem_ds_t notify_seg_ds;
     void *notify_segment_base;
+    /* mpi_assert_max_num_notify as given at window creation, or 0 for none.
+     * It sized the counter reservation and is what MPI_WIN_NOTIFICATION_NUM_SB
+     * and the window's info report; it does not cap what may be attached. */
     unsigned int notify_max_assert;
     /* notify_max_assert rendered for the window's info; the info subscriber
      * hands this back, so it must outlive the callback that returns it. */
