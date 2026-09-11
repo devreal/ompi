@@ -146,7 +146,7 @@ osc_sm_grow_notify_counters(ompi_osc_sm_module_t *module, const unsigned long *n
         return ret;
     }
 
-    if ('\0' == new_seg_ds.seg_name[0]) {
+    if (!OPAL_SHMEM_DS_IS_VALID(&new_seg_ds)) {
         return MPI_ERR_NO_MEM;
     }
 
