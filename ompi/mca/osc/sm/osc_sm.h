@@ -100,7 +100,8 @@ struct ompi_osc_sm_module_t {
     void *notify_segment_base;
     /* mpi_assert_max_num_notify as given at window creation, or 0 for none.
      * It sized the counter reservation and is what MPI_WIN_NOTIFICATION_NUM_SB
-     * and the window's info report; it does not cap what may be attached. */
+     * and the window's info report; MPI_Win_set_num_notify rejects a request
+     * above it. */
     unsigned int notify_max_assert;
     /* notify_max_assert rendered for the window's info; the info subscriber
      * hands this back, so it must outlive the callback that returns it. */
