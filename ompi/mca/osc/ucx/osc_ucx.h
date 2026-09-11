@@ -359,8 +359,7 @@ int ompi_osc_ucx_win_reset_notify_value(struct ompi_win_t *win, int notify,
 int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *info,
                                      int num_notifications);
 /* Collectively reserve new_capacity notification counters per rank, replacing
- * the current registration if there is one.  Defined in osc_ucx_component.c
- * because it needs the component's address-exchange helper. */
+ * the current registration if there is one. */
 int ompi_osc_ucx_grow_notify_counters(ompi_osc_ucx_module_t *module,
                                       unsigned int new_capacity);
 
