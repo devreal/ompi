@@ -243,15 +243,19 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
           || (0 != module->notify_max_assert &&
               requested > (unsigned long) module->notify_max_assert);
 
-    if (bad && 1 == comm_size) {
-        return MPI_ERR_ARG;
+    if (bad) {
+        if (1 == comm_size) {
+            return MPI_ERR_ARG;
+        }
+        /* Valid counts come from an int, so they can never equal ULONG_MAX */
+        requested = ULONG_MAX;
+        goto agree;
     }
 
-    /* mpi_assert_max_num_notify is the user asserting what will be requested,
-     * not a limit on what osc/sm supports (MPI-5.1 section 12.2.3).  It sized
-     * the reservation made at window creation; a request above it is served
-     * exactly like one above the default reservation, by growing into a new
-     * shared segment. */
+    /* mpi_assert_max_num_notify is this rank's promise not to ask for more
+     * (MPI-5.1 section 12.2.3); a request above it was rejected above.  A
+     * request above the current capacity but within the promise is served by
+     * growing into a new shared segment. */
 
     memset((void *) module->notify_bases[rank], 0,
            module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
