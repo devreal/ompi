@@ -27,11 +27,6 @@
 #define OMPI_OSC_UCX_POST_PEER_MAX 32
 #define OMPI_OSC_UCX_ATTACH_MAX    48
 #define OMPI_OSC_UCX_MEM_ADDR_MAX_LEN  1024
-/* Default number of RMA notification counters reserved per MPI process in each
- * window's registered memory region.  Overridden per job by the
- * osc_ucx_num_notify_counters MCA parameter and per window by the
- * "mpi_assert_max_num_notify" info key. */
-#define OMPI_OSC_UCX_DEFAULT_NOTIFY_COUNTERS 16
 
 
 typedef struct ompi_osc_ucx_component {
@@ -48,9 +43,6 @@ typedef struct ompi_osc_ucx_component {
     bool no_locks; /* Default value of the no_locks info key for new windows */
     bool acc_single_intrinsic;
     unsigned int priority;
-    /* Number of notification counters reserved per MPI process in each window,
-     * unless the window's info gives "mpi_assert_max_num_notify". */
-    unsigned int num_notify_counters;
     /* directory where to place backing files */
     char *backing_directory;
 } ompi_osc_ucx_component_t;
@@ -134,19 +126,17 @@ typedef struct ompi_osc_ucx_module {
                           * rank (size comm_size), as set by MPI_WIN_SET_NUM_NOTIFY and
                           * kept consistent across the group by an allgather.  Always
                           * <= notify_capacity. */
-    unsigned int notify_capacity; /* notification counters currently reserved per rank.
-                                   * Agreed on across the group and uniform.  Grown on
-                                   * demand by MPI_WIN_SET_NUM_NOTIFY unless
-                                   * notify_max_assert caps it. */
-    unsigned int notify_max_assert; /* non-zero only if *every* rank passed
-                                     * "mpi_assert_max_num_notify" at window creation.
-                                     * Then the agreed reservation is a hard cap and the
-                                     * counters never grow (MPI-5.1 12.2: the assertion
-                                     * lets the implementation optimize the allocation).
-                                     * Zero means no rank asserted a bound, so the
-                                     * standard's "does not assume any limit" applies. */
+    unsigned int notify_capacity; /* notification counters currently reserved per rank,
+                                   * uniform across the group.  Starts at the largest
+                                   * "mpi_assert_max_num_notify" any rank gave at window
+                                   * creation, or 0 without one, and is grown on demand
+                                   * by MPI_WIN_SET_NUM_NOTIFY. */
+    unsigned int notify_max_assert; /* this rank's own "mpi_assert_max_num_notify", or 0
+                                     * if it gave none: its promise not to ask
+                                     * MPI_WIN_SET_NUM_NOTIFY for more, so a larger
+                                     * request from it is rejected. */
     uint64_t *notify_addrs;  /* per-rank base address of the notification counters
-                              * (size comm_size) */
+                              * (size comm_size); NULL until counters are reserved */
     void *notify_base;       /* this rank's counters; notify_capacity uint64_t */
     size_t   *sizes; /* used if not every process has the same size */
     uint64_t *addrs;
@@ -368,9 +358,9 @@ int ompi_osc_ucx_win_reset_notify_value(struct ompi_win_t *win, int notify,
                                         OMPI_MPI_COUNT_TYPE *value);
 int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *info,
                                      int num_notifications);
-/* Collectively re-reserve new_capacity notification counters per rank, replacing
- * the current registration.  Defined in osc_ucx_component.c because it needs the
- * component's address-exchange helper. */
+/* Collectively reserve new_capacity notification counters per rank, replacing
+ * the current registration if there is one.  Defined in osc_ucx_component.c
+ * because it needs the component's address-exchange helper. */
 int ompi_osc_ucx_grow_notify_counters(ompi_osc_ucx_module_t *module,
                                       unsigned int new_capacity);
 

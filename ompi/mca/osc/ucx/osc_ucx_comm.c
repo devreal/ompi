@@ -24,8 +24,6 @@
 
 #include <limits.h>
 
-#include "ompi/attribute/attribute.h"
-
 
 #define CHECK_VALID_RKEY(_module, _target, _count)                               \
     if (!((_module)->win_info_array[_target]).rkey_init && ((_count) > 0)) {     \
@@ -640,7 +638,8 @@ osc_ucx_notify_counter_addr(ompi_osc_ucx_module_t *module, int target, int notif
 }
 
 /* A region of module->notify_capacity notification counters is registered per
- * rank at window creation (see osc_ucx_component.c), but only the first
+ * rank -- at window creation when "mpi_assert_max_num_notify" was given, and
+ * otherwise by the first MPI_WIN_SET_NUM_NOTIFY -- but only the first
  * notify_counts[rank] of them are considered *attached* by
  * MPI_WIN_SET_NUM_NOTIFY.  Per the MPI Standard it is erroneous to reference a
  * counter that is out of range at the target, so validate against the target
@@ -755,10 +754,11 @@ int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *
 
     (void) info; /* "mpi_assert_same_num_notifications" is an optimization hint only */
 
-    /* When every rank asserted "mpi_assert_max_num_notify" at window creation,
-     * that value is a hard upper bound and asking for more is erroneous.
-     * Otherwise MPI-5.1 12.2 says no limit is assumed, so a request above the
-     * current reservation grows the counters below rather than failing.
+    /* A rank that gave "mpi_assert_max_num_notify" at window creation promised
+     * not to ask for more counters than that, so a larger request is erroneous,
+     * as is a negative one.  The promise is per rank, like the info it came
+     * from.  Any other request above the current reservation grows the counters
+     * below.
      *
      * This is a synchronizing collective, so a rank with a bad argument must not
      * return before the allgather below -- that would leave the rest of the
@@ -803,11 +803,11 @@ int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *
 
     for (i = 0; i < comm_size; i++) {
         if (0 > requested_counts[i]) {
-            /* Some rank asked for a count outside [0, notify_capacity].  Every
-             * rank sees the same gathered array and bails identically, so the
-             * attached counts stay as they were rather than the group ending up
-             * half-reconfigured.  The counters have been zeroed, which is
-             * harmless for a call that is erroneous anyway. */
+            /* Some rank asked for a negative count, or for more than it
+             * asserted.  Every rank sees the same gathered array and bails
+             * identically, so the attached counts stay as they were rather than
+             * the group ending up half-reconfigured.  The counters have been
+             * zeroed, which is harmless for a call that is erroneous anyway. */
             free(requested_counts);
             return MPI_ERR_ARG;
         }
@@ -816,10 +816,11 @@ int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *
     /* Every rank sees the same gathered array, so they all reach the same
      * decision about whether to grow and to what size, without extra
      * communication.  The reservation is uniform across the window (window
-     * creation agrees it with an allreduce), so it grows to the largest request
-     * anyone made.  Never shrink: a rank that lowered its count keeps the space
-     * it already has, so only genuine growth costs a re-registration and
-     * alternating high/low requests do not thrash the NIC. */
+     * creation agrees on it, and every growth uses the same gathered maximum),
+     * so it grows to the largest request anyone made.  Never shrink: a rank
+     * that lowered its count keeps the space it already has, so only genuine
+     * growth costs a re-registration and alternating high/low requests do not
+     * thrash the NIC. */
     needed = module->notify_capacity;
     for (i = 0; i < comm_size; i++) {
         if ((unsigned int) requested_counts[i] > needed) {
@@ -829,17 +830,6 @@ int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *
 
     if (needed > module->notify_capacity) {
         ret = ompi_osc_ucx_grow_notify_counters(module, needed);
-        if (OMPI_SUCCESS != ret) {
-            free(requested_counts);
-            return ret;
-        }
-
-        /* MPI_WIN_NOTIFICATION_NUM_SB is the count supported without paying for
-         * a re-registration, so it has to follow the reservation rather than
-         * stay at whatever was cached when the window was created. */
-        ret = ompi_attr_set_int(WIN_ATTR, win, &win->w_keyhash,
-                                MPI_WIN_NOTIFICATION_NUM_SB,
-                                (int) module->notify_capacity, true);
         if (OMPI_SUCCESS != ret) {
             free(requested_counts);
             return ret;
@@ -857,15 +847,19 @@ int ompi_osc_ucx_win_get_notify_bounds(struct ompi_win_t *win, int *num_sb, int 
 {
     ompi_osc_ucx_module_t *module = (ompi_osc_ucx_module_t *)win->w_osc_module;
 
-    /* The current reservation is what is supported without paying for a
-     * re-registration, so it is the suggested bound.  The hard bound is only
-     * real when every rank asserted "mpi_assert_max_num_notify" at window
-     * creation; otherwise MPI_WIN_SET_NUM_NOTIFY grows the counters on demand
-     * and the only limit is what can be allocated.  Neither depends on the
-     * window's flavor. */
-    *num_sb = (int) module->notify_capacity;
-    *num_ub = (0 != module->notify_max_assert) ? (int) module->notify_max_assert
-                                               : INT_MAX;
+    /* Only called once, from window creation (config_window caches the
+     * attributes), so notify_capacity is still the reservation made for
+     * "mpi_assert_max_num_notify".  That many counters are already registered
+     * and cost no re-registration, which is what the suggested bound describes.
+     * Without the key nothing is reserved and the first MPI_WIN_SET_NUM_NOTIFY
+     * registers exactly what it is asked for, so no count is cheaper than
+     * another and INT_MAX says there is no suggestion.  The counters grow on
+     * demand, so nothing short of memory bounds what the implementation
+     * supports.  A rank that asserted a maximum is held to it by
+     * MPI_WIN_SET_NUM_NOTIFY, but that is the program's own limit, not the
+     * implementation's.  Neither bound depends on the window's flavor. */
+    *num_sb = (0 != module->notify_capacity) ? (int) module->notify_capacity : INT_MAX;
+    *num_ub = INT_MAX;
 
     /* Counters are uint64_t and only ever incremented by one per notified
      * operation, but they are returned to the user as a signed MPI_Count, so
