@@ -122,6 +122,22 @@ typedef struct ompi_osc_ucx_module {
     struct ompi_communicator_t *comm;
     int flavor;
     size_t    size;
+    int *notify_counts;  /* per-rank number of notification counters *attached* at each
+                          * rank (size comm_size), as set by MPI_WIN_SET_NUM_NOTIFY and
+                          * kept consistent across the group by an allgather.  Always
+                          * <= notify_capacity. */
+    unsigned int notify_capacity; /* notification counters currently reserved per rank,
+                                   * uniform across the group.  Starts at the largest
+                                   * "mpi_assert_max_num_notify" any rank gave at window
+                                   * creation, or 0 without one, and is grown on demand
+                                   * by MPI_WIN_SET_NUM_NOTIFY. */
+    unsigned int notify_max_assert; /* this rank's own "mpi_assert_max_num_notify", or 0
+                                     * if it gave none: its promise not to ask
+                                     * MPI_WIN_SET_NUM_NOTIFY for more, so a larger
+                                     * request from it is rejected. */
+    uint64_t *notify_addrs;  /* per-rank base address of the notification counters
+                              * (size comm_size); NULL until counters are reserved */
+    void *notify_base;       /* this rank's counters; notify_capacity uint64_t */
     size_t   *sizes; /* used if not every process has the same size */
     uint64_t *addrs;
     uint64_t *state_addrs;
@@ -149,6 +165,11 @@ typedef struct ompi_osc_ucx_module {
     opal_common_ucx_ctx_t *ctx;
     opal_common_ucx_wpmem_t *mem;
     opal_common_ucx_wpmem_t *state_mem;
+    /* Notification counters get their own registration rather than being
+     * appended to the window data: the data region for MPI_WIN_FLAVOR_CREATE
+     * belongs to the user and has no room for them, and a dynamic window has
+     * no data region at all. */
+    opal_common_ucx_wpmem_t *notify_mem;
     ompi_osc_ucx_mem_ranges_t *epoc_outstanding_ops_mems;
     bool skip_sync_check;
     bool noncontig_shared_win;
@@ -276,6 +297,74 @@ int ompi_osc_find_attached_region_position(ompi_osc_dynamic_win_info_t *dynamic_
                                            uint64_t base, size_t len, int *insert);
 int ompi_osc_ucx_dynamic_lock(ompi_osc_ucx_module_t *module, int target);
 int ompi_osc_ucx_dynamic_unlock(ompi_osc_ucx_module_t *module, int target);
+
+int ompi_osc_ucx_put_notify(const void *origin_addr, size_t origin_count,
+                            struct ompi_datatype_t *origin_dt,
+                            int target, ptrdiff_t target_disp, size_t target_count,
+                            struct ompi_datatype_t *target_dt,
+                            int notify, struct ompi_win_t *win);
+int ompi_osc_ucx_get_notify(void *origin_addr, size_t origin_count,
+                            struct ompi_datatype_t *origin_dt,
+                            int target, ptrdiff_t target_disp, size_t target_count,
+                            struct ompi_datatype_t *target_dt,
+                            int notify, struct ompi_win_t *win);
+int ompi_osc_ucx_rput_notify(const void *origin_addr, size_t origin_count,
+                             struct ompi_datatype_t *origin_dt,
+                             int target, ptrdiff_t target_disp, size_t target_count,
+                             struct ompi_datatype_t *target_dt,
+                             int notify, struct ompi_win_t *win,
+                             struct ompi_request_t **request);
+int ompi_osc_ucx_rget_notify(void *origin_addr, size_t origin_count,
+                             struct ompi_datatype_t *origin_dt,
+                             int target, ptrdiff_t target_disp, size_t target_count,
+                             struct ompi_datatype_t *target_dt,
+                             int notify, struct ompi_win_t *win,
+                             struct ompi_request_t **request);
+int ompi_osc_ucx_accumulate_notify(const void *origin_addr, size_t origin_count,
+                                   struct ompi_datatype_t *origin_dt,
+                                   int target, ptrdiff_t target_disp, size_t target_count,
+                                   struct ompi_datatype_t *target_dt,
+                                   struct ompi_op_t *op, int notify,
+                                   struct ompi_win_t *win);
+int ompi_osc_ucx_get_accumulate_notify(const void *origin_addr, size_t origin_count,
+                                       struct ompi_datatype_t *origin_dt,
+                                       void *result_addr, size_t result_count,
+                                       struct ompi_datatype_t *result_dt,
+                                       int target, ptrdiff_t target_disp, size_t target_count,
+                                       struct ompi_datatype_t *target_dt,
+                                       struct ompi_op_t *op, int notify,
+                                       struct ompi_win_t *win);
+int ompi_osc_ucx_raccumulate_notify(const void *origin_addr, size_t origin_count,
+                                    struct ompi_datatype_t *origin_dt,
+                                    int target, ptrdiff_t target_disp, size_t target_count,
+                                    struct ompi_datatype_t *target_dt,
+                                    struct ompi_op_t *op, int notify,
+                                    struct ompi_win_t *win,
+                                    struct ompi_request_t **request);
+int ompi_osc_ucx_rget_accumulate_notify(const void *origin_addr, size_t origin_count,
+                                        struct ompi_datatype_t *origin_dt,
+                                        void *result_addr, size_t result_count,
+                                        struct ompi_datatype_t *result_dt,
+                                        int target, ptrdiff_t target_disp, size_t target_count,
+                                        struct ompi_datatype_t *target_dt,
+                                        struct ompi_op_t *op, int notify,
+                                        struct ompi_win_t *win,
+                                        struct ompi_request_t **request);
+int ompi_osc_ucx_win_get_notify_value(struct ompi_win_t *win, int notify,
+                                      OMPI_MPI_COUNT_TYPE *value);
+int ompi_osc_ucx_win_get_notify_bounds(struct ompi_win_t *win, int *num_sb, int *num_ub,
+                                       OMPI_MPI_COUNT_TYPE *value_ub);
+int ompi_osc_ucx_win_reset_notify_value(struct ompi_win_t *win, int notify,
+                                        OMPI_MPI_COUNT_TYPE *value);
+int ompi_osc_ucx_win_set_num_notify(struct ompi_win_t *win, struct opal_info_t *info,
+                                     int num_notifications);
+/* Collectively reserve new_capacity notification counters per rank, replacing
+ * the current registration if there is one. */
+int ompi_osc_ucx_grow_notify_counters(ompi_osc_ucx_module_t *module,
+                                      unsigned int new_capacity);
+
+int ompi_osc_ucx_win_get_num_notify(struct ompi_win_t *win, int target_rank,
+                                     int *num_notifications);
 
 /* returns the size at the peer */
 static inline size_t ompi_osc_ucx_get_size(ompi_osc_ucx_module_t *module, int rank)
