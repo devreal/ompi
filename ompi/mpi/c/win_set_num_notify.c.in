@@ -30,9 +30,8 @@ PROTOTYPE ERROR_CLASS win_set_num_notify(WIN win, INFO info, INT num_notificatio
             return OMPI_ERRHANDLER_NOHANDLE_INVOKE(MPI_ERR_WIN, FUNC_NAME);
         } else if (NULL != info && MPI_INFO_NULL != info && ompi_info_is_freed(info)) {
             rc = MPI_ERR_INFO;
-        } else if (num_notifications < 0) {
-            rc = MPI_ERR_ARG;
         }
+
 
         OMPI_ERRHANDLER_CHECK(rc, win, rc, FUNC_NAME);
     }

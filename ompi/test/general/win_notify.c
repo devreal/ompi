@@ -489,9 +489,8 @@ static void test_counter_growth(void)
 }
 
 /* A non-zero mpi_assert_max_num_notify is the user promising not to ask for
- * more counters than that, so osc/sm reserves exactly that many.  It is an
- * allocation hint and not a cap: a request above it still grows the window,
- * which is what MPI_WIN_NOTIFICATION_NUM_UB advertises. */
+ * more counters than that.  osc/sm reserves exactly that many and holds the
+ * user to the promise rather than silently reallocating. */
 static void test_max_num_notify_assertion(void)
 {
     int *base = NULL;
@@ -520,23 +519,23 @@ static void test_max_num_notify_assertion(void)
     test_verify("Win_get_num_notify returns the asserted maximum",
                 MPI_SUCCESS == rc && 8 == num);
 
-    /* Past it is a reallocation rather than an error: the assertion sized the
-     * window, it does not bound it. */
+    /* Past it is an error rather than a reallocation: the window was sized on
+     * the strength of the assertion. */
     rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 9);
-    test_verify("Win_set_num_notify grows past the asserted maximum",
-                MPI_SUCCESS == rc);
+    test_verify("Win_set_num_notify refuses to exceed the asserted maximum",
+                MPI_ERR_ARG == rc);
 
+    /* The refused call must not have disturbed the counters that do exist. */
     rc = MPI_Win_get_num_notify(win, 0, &num);
-    test_verify("Win_get_num_notify returns the grown count",
-                MPI_SUCCESS == rc && 9 == num);
+    test_verify("a refused Win_set_num_notify leaves the count alone",
+                MPI_SUCCESS == rc && 8 == num);
 
-    /* The counter that only the growth provided must work end to end. */
     MPI_Win_lock_all(0, win);
     int src = 7;
-    rc = MPI_Put_notify(&src, 1, MPI_INT, 0, 0, 1, MPI_INT, 8, win);
-    test_verify("Put_notify works on the counter past the assertion",
+    rc = MPI_Put_notify(&src, 1, MPI_INT, 0, 0, 1, MPI_INT, 7, win);
+    test_verify("Put_notify works on the last asserted counter",
                 MPI_SUCCESS == rc);
-    check_counter(win, 8, 1, "the counter past the assertion advanced");
+    check_counter(win, 7, 1, "the last asserted counter advanced");
     MPI_Win_unlock_all(win);
 
     MPI_Win_free(&win);
@@ -582,12 +581,6 @@ static void test_notify_attributes(void)
                 MPI_SUCCESS == rc && flag && NULL != value_ub);
     test_verify("VALUE_UB is the full range of the counter type",
                 INT64_MAX == *value_ub);
-
-    /* Asking for exactly NUM_SB counters must not need a reallocation, and
-     * must be accepted. */
-    int sb = *num_sb;
-    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, sb);
-    test_verify("Win_set_num_notify accepts NUM_SB counters", MPI_SUCCESS == rc);
 
     MPI_Win_free(&win);
 
@@ -677,10 +670,10 @@ static void test_notify_info_reporting(void)
     test_verify("Win_set_info cannot raise the assertion",
                 0 == strcmp(value, "8"));
 
-    /* The assertion the window was sized for still is not a cap. */
+    /* And the cap the window was sized for is still the one enforced. */
     rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 9);
-    test_verify("set_num_notify grows past the reported assertion",
-                MPI_SUCCESS == rc);
+    test_verify("the original assertion still caps set_num_notify",
+                MPI_ERR_ARG == rc);
 
     MPI_Win_free(&win);
 }

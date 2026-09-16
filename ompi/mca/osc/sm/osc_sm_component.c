@@ -160,9 +160,11 @@ static int component_register (void)
     opal_asprintf(&description_str,
                   "Number of RMA notification counters reserved per MPI process "
                   "in the shared memory segment of each window.  Windows whose "
-                  "info gives an mpi_assert_max_num_notify value use that "
-                  "instead.  MPI_Win_set_num_notify may exceed this value, at "
-                  "the cost of allocating a new shared segment (default: %u)",
+                  "info gives an mpi_assert_max_num_notify value reserve that "
+                  "many instead, and MPI_Win_set_num_notify may not exceed it.  "
+                  "Without the assertion MPI_Win_set_num_notify may exceed this "
+                  "value, at the cost of allocating a new shared segment "
+                  "(default: %u)",
                   mca_osc_sm_component.num_notify_counters);
     (void) mca_base_component_var_register(&mca_osc_sm_component.super.osc_version,
                                            "num_notify_counters", description_str,
@@ -218,8 +220,8 @@ static int osc_sm_reserved_notify_counters(opal_info_t *info, unsigned int *asse
 /* Report the mpi_assert_max_num_notify actually in effect on the window.  The
  * counter reservation is fixed when the window is created, so a value handed to
  * MPI_Win_set_info afterwards cannot change it and is deliberately ignored --
- * returning our own value leaves MPI_Win_get_info describing the reservation
- * osc/sm really made rather than what was last asked for. */
+ * returning our own value leaves MPI_Win_get_info describing what osc/sm really
+ * enforces rather than what was last asked for. */
 static const char *
 osc_sm_notify_assert_info(opal_infosubscriber_t *obj,
                           const char *key __opal_attribute_unused__,

@@ -146,7 +146,7 @@ osc_sm_grow_notify_counters(ompi_osc_sm_module_t *module, const unsigned long *n
         return ret;
     }
 
-    if ('\0' == new_seg_ds.seg_name[0]) {
+    if (!OPAL_SHMEM_DS_IS_VALID(&new_seg_ds)) {
         return MPI_ERR_NO_MEM;
     }
 
@@ -223,7 +223,7 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
     int rank = ompi_comm_rank(module->comm);
     unsigned long requested = (unsigned long) num_notifications;
     unsigned long *new_caps;
-    bool grow = false;
+    bool grow = false, bad;
     int ret, i;
 
     /* "mpi_assert_same_num_notifications" would let us skip the allgather below
@@ -232,15 +232,30 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
      * synchronizing and collective. */
     (void) info;
 
-    if (num_notifications < 0) {
-        return MPI_ERR_ARG;
+    /* num_notifications is a local argument -- MPI-5.1 12.6.1 allows it to
+     * differ between MPI processes -- but this is a synchronizing collective.
+     * A rank that rejected its own value and returned here would leave every
+     * other rank blocked in the allgather below, turning an erroneous argument
+     * into a hang.  So the validity rides through the collective as a sentinel
+     * and all ranks fail together.  A multi-process window defers the decision;
+     * a single-process one has nobody to agree with and can answer now. */
+    bad = (num_notifications < 0)
+          || (0 != module->notify_max_assert &&
+              requested > (unsigned long) module->notify_max_assert);
+
+    if (bad) {
+        if (1 == comm_size) {
+            return MPI_ERR_ARG;
+        }
+        /* Valid counts come from an int, so they can never equal ULONG_MAX */
+        requested = ULONG_MAX;
+        goto agree;
     }
 
-    /* mpi_assert_max_num_notify is the user asserting what will be requested,
-     * not a limit on what osc/sm supports (MPI-5.1 section 12.2.3).  It sized
-     * the reservation made at window creation; a request above it is served
-     * exactly like one above the default reservation, by growing into a new
-     * shared segment. */
+    /* mpi_assert_max_num_notify is this rank's promise not to ask for more
+     * (MPI-5.1 section 12.2.3); a request above it was rejected above.  A
+     * request above the current capacity but within the promise is served by
+     * growing into a new shared segment. */
 
     memset((void *) module->notify_bases[rank], 0,
            module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
@@ -267,6 +282,7 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
         return OMPI_SUCCESS;
     }
 
+agree:
     new_caps = malloc(sizeof(*new_caps) * comm_size);
     if (NULL == new_caps) {
         return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
@@ -279,6 +295,16 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
     if (OMPI_SUCCESS != ret) {
         free(new_caps);
         return ret;
+    }
+
+    for (i = 0 ; i < comm_size ; ++i) {
+        if (ULONG_MAX == new_caps[i]) {
+            /* Some rank supplied an invalid count.  Every rank sees the same
+             * gathered array, so they all report the same error and none of
+             * them reconfigures. */
+            free(new_caps);
+            return MPI_ERR_ARG;
+        }
     }
 
     for (i = 0 ; i < comm_size ; ++i) {

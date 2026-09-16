@@ -319,8 +319,8 @@ static void test_info_and_attributes(void)
     MPI_Win_free(&win);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    /* With an assertion the window is sized for exactly that many at every
-     * rank, and growing past it stays collective. */
+    /* With an assertion the window is sized for exactly that many, and the
+     * promise is held against every rank. */
     MPI_Info_create(&info);
     MPI_Info_set(info, "mpi_assert_max_num_notify", "8");
     win = make_window(info, &base);
@@ -344,11 +344,8 @@ static void test_info_and_attributes(void)
           MPI_SUCCESS == rc && 8 == num);
 
     rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 9);
-    check("Win_set_num_notify grows past the assertion", MPI_SUCCESS == rc);
-
-    rc = MPI_Win_get_num_notify(win, (rank + 1) % nprocs, &num);
-    check("a peer grew past the assertion too",
-          MPI_SUCCESS == rc && 9 == num);
+    check("Win_set_num_notify refuses to exceed the assertion",
+          MPI_ERR_ARG == rc);
 
     MPI_Win_free(&win);
     MPI_Barrier(MPI_COMM_WORLD);
