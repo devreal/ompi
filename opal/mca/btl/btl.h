@@ -282,10 +282,11 @@ typedef uint8_t mca_btl_base_tag_t;
  * btl_deregister_notification, btl_notification_read and
  * btl_notification_wait. The registration handle returned alongside the
  * counter is an ordinary handle: an origin uses it as the remote handle of
- * a btl_put or btl_get, and the counter at the target counts those
- * operations. This lets a consumer implement RMA-with-notification with a
- * single network operation rather than a data transfer followed by a
- * separate atomic update.
+ * a btl_put, and the counter at the target counts those operations. Only
+ * operations that modify the region (puts and atomics) are counted; a
+ * btl_get through the handle is not. This lets a consumer implement
+ * RMA-with-notification for writes with a single network operation rather
+ * than a data transfer followed by a separate atomic update.
  */
 #define MCA_BTL_FLAGS_NOTIFIED_RMA 0x1000000
 
@@ -1199,8 +1200,9 @@ typedef struct mca_btl_base_notification_t mca_btl_base_notification_t;
  *
  * Registers [base, base + size) and associates a hardware counter with the
  * registration. The counter starts at zero and is incremented by the network
- * adapter once per completed remote operation on the region, after the data
- * movement has completed at this process.
+ * adapter once per completed remote operation that modifies the region (a
+ * put or an atomic), after the data movement has completed at this process.
+ * Remote reads of the region are not counted.
  *
  * The same memory may be registered this way more than once. Each such
  * registration yields a distinct handle and a distinct counter, so a consumer

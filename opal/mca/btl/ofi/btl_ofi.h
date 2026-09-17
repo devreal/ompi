@@ -128,6 +128,9 @@ struct mca_btl_ofi_module_t {
     bool use_virt_addr;
     bool is_scalable_ep;
     bool use_fi_mr_bind;
+    /** the domain was opened with FI_MR_RMA_EVENT: memory regions registered
+     * for a notification counter are created disabled and need fi_mr_enable */
+    bool use_mr_rma_event;
 
     opal_atomic_int64_t outstanding_rdma;
     opal_atomic_int64_t outstanding_send;

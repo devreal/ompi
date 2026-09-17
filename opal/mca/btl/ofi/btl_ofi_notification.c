@@ -18,11 +18,12 @@
  * Hardware notification counters.
  *
  * A notification is a libfabric counter (fi_cntr) bound to a memory region
- * with FI_REMOTE_WRITE | FI_REMOTE_READ. Once a region has been registered
- * this way the adapter increments the counter every time a remote operation
- * on that region completes here, without any involvement of this process's
- * CPU and without the origin having to issue a second operation to announce
- * that the data has landed.
+ * with FI_REMOTE_WRITE. Once a region has been registered this way the
+ * adapter increments the counter every time a remote write or atomic
+ * operation on that region completes here, without any involvement of this
+ * process's CPU and without the origin having to issue a second operation to
+ * announce that the data has landed. libfabric defines no counter event for
+ * remote reads, so reads of the region are not counted (fi_mr(3)).
  *
  * The counter counts operations on one memory region, so a consumer that
  * needs several independent counters over the same buffer obtains them by
@@ -82,7 +83,9 @@ mca_btl_ofi_register_notification(mca_btl_base_module_t *btl, void *base, size_t
     attr.context = NULL;
     attr.requested_key = (uint64_t) (uintptr_t) notification;
 
-    rc = fi_mr_regattr(ofi_btl->domain, &attr, 0, &notification->mr);
+    /* FI_RMA_EVENT declares at creation that a completion counter will be
+     * associated with the region, which FI_MR_RMA_EVENT domains require */
+    rc = fi_mr_regattr(ofi_btl->domain, &attr, FI_RMA_EVENT, &notification->mr);
     if (FI_SUCCESS != rc) {
         BTL_VERBOSE(("%s failed fi_mr_regattr with err=%s", ofi_btl->linux_device_name,
                      fi_strerror(-rc)));
@@ -90,14 +93,9 @@ mca_btl_ofi_register_notification(mca_btl_base_module_t *btl, void *base, size_t
         goto fail;
     }
 
-    /* Bind the counter for both remote writes and remote reads so that a
-     * consumer can notify on either. We deliberately do not fall back to
-     * counting writes alone: a counter that silently misses remote reads
-     * would leave a get-with-notification permanently unnoticed at the
-     * target, which is worse than reporting no support at all and letting
-     * the consumer use its own fallback path. */
-    rc = fi_mr_bind(notification->mr, &notification->cntr->fid,
-                    FI_REMOTE_WRITE | FI_REMOTE_READ);
+    /* FI_REMOTE_WRITE is the only event libfabric defines for counting
+     * operations on a memory region; it covers remote writes and atomics. */
+    rc = fi_mr_bind(notification->mr, &notification->cntr->fid, FI_REMOTE_WRITE);
     if (FI_SUCCESS != rc) {
         BTL_VERBOSE(("%s failed to bind notification counter with err=%s",
                      ofi_btl->linux_device_name, fi_strerror(-rc)));
@@ -113,14 +111,16 @@ mca_btl_ofi_register_notification(mca_btl_base_module_t *btl, void *base, size_t
         }
     }
 
-    /* Unlike an ordinary registration this is required unconditionally: an mr
-     * that has anything bound to it is created disabled and does not service
-     * remote operations until enabled. */
-    rc = fi_mr_enable(notification->mr);
-    if (FI_SUCCESS != rc) {
-        BTL_VERBOSE(("%s failed fi_mr_enable with err=%s", ofi_btl->linux_device_name,
-                     fi_strerror(-rc)));
-        goto fail;
+    /* A region registered with FI_RMA_EVENT in an FI_MR_RMA_EVENT domain, or
+     * in an FI_MR_ENDPOINT domain, is created disabled and does not service
+     * remote operations until enabled, which must come after every binding. */
+    if (ofi_btl->use_mr_rma_event || ofi_btl->use_fi_mr_bind) {
+        rc = fi_mr_enable(notification->mr);
+        if (FI_SUCCESS != rc) {
+            BTL_VERBOSE(("%s failed fi_mr_enable with err=%s", ofi_btl->linux_device_name,
+                         fi_strerror(-rc)));
+            goto fail;
+        }
     }
 
     notification->handle.rkey = fi_mr_key(notification->mr);
