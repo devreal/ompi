@@ -128,6 +128,9 @@ struct mca_btl_ofi_module_t {
     bool use_virt_addr;
     bool is_scalable_ep;
     bool use_fi_mr_bind;
+    /** the domain was opened with FI_MR_RMA_EVENT: memory regions registered
+     * for a notification counter are created disabled and need fi_mr_enable */
+    bool use_mr_rma_event;
 
     opal_atomic_int64_t outstanding_rdma;
     opal_atomic_int64_t outstanding_send;
@@ -170,6 +173,11 @@ struct mca_btl_ofi_component_t {
     bool disable_inject;
 
     bool disable_hmem;
+
+    /** request FI_RMA_EVENT so that notification counters can be bound to
+     * memory regions. optional: if no provider offers it the query is retried
+     * without it. */
+    bool enable_rma_event;
 
     /** All BTL OFI modules (1 per tl) */
     mca_btl_ofi_module_t *modules[MCA_BTL_OFI_MAX_MODULES];
@@ -365,6 +373,20 @@ void mca_btl_ofi_rcache_init(mca_btl_ofi_module_t *module);
 int mca_btl_ofi_reg_mem(void *reg_data, void *base, size_t size,
                         mca_rcache_base_registration_t *reg);
 int mca_btl_ofi_dereg_mem(void *reg_data, mca_rcache_base_registration_t *reg);
+
+/* hardware notification counters. only installed on the module when the
+ * selected provider reports FI_RMA_EVENT. */
+struct mca_btl_base_notification_t *
+mca_btl_ofi_register_notification(mca_btl_base_module_t *btl, void *base, size_t size,
+                                  uint32_t flags, mca_btl_base_registration_handle_t **handle);
+int mca_btl_ofi_deregister_notification(mca_btl_base_module_t *btl,
+                                        struct mca_btl_base_notification_t *notification);
+int mca_btl_ofi_notification_read(mca_btl_base_module_t *btl,
+                                  struct mca_btl_base_notification_t *notification,
+                                  uint64_t *value);
+int mca_btl_ofi_notification_wait(mca_btl_base_module_t *btl,
+                                  struct mca_btl_base_notification_t *notification,
+                                  uint64_t threshold, int timeout);
 
 int mca_btl_ofi_context_progress(mca_btl_ofi_context_t *context);
 

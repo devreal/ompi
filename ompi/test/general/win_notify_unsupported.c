@@ -9,15 +9,20 @@
 
 /*
  * Notified RMA (MPI-5.1 section 12.6) is optional: an osc component that
- * does not implement it leaves the corresponding entries of the module
- * struct NULL.  Every notified entry point must report that as
+ * does not implement part of it leaves the corresponding entries of the
+ * module struct NULL.  Every such entry point must report that as
  * MPI_ERR_UNSUPPORTED_OPERATION rather than calling through a NULL
  * function pointer.
  *
- * osc/rdma is forced because it is a general-purpose component that does
- * not implement any of these, so it exercises the guard on all twelve
- * entry points.  If it cannot be selected in this build the test reports
- * that and passes trivially.
+ * osc/rdma is forced because it is a general-purpose component that
+ * implements the blocking put and get with notification and the counter
+ * management calls, but none of the accumulate or request-based notified
+ * operations, so it exercises the guard on those entry points.  If it cannot
+ * be selected in this build the test reports that and passes trivially.
+ *
+ * Because osc/rdma does implement counter management, the window must also
+ * report usable notification bounds rather than the zeros cached for a
+ * component with no support at all.
  *
  * Note: the library is compiled with -DNDEBUG, so assert() is a no-op
  * here -- all verification must go through test_verify().
@@ -25,6 +30,7 @@
 
 #include "ompi_config.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -59,33 +65,11 @@ int main(int argc, char *argv[])
 
     int src = 1;
     int result = 0;
-    MPI_Count value = 0;
-    int num = 0;
     MPI_Request req = MPI_REQUEST_NULL;
-
-    /* Counter management and the accessors are usable outside an epoch. */
-    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 4);
-    test_verify("Win_set_num_notify reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
-    rc = MPI_Win_get_num_notify(win, 0, &num);
-    test_verify("Win_get_num_notify reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
-    rc = MPI_Win_get_notify_value(win, 0, &value);
-    test_verify("Win_get_notify_value reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
-    rc = MPI_Win_reset_notify_value(win, 0, &value);
-    test_verify("Win_reset_notify_value reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
 
     MPI_Win_lock_all(0, win);
 
-    /* The four blocking communication operations. */
-    rc = MPI_Put_notify(&src, 1, MPI_INT, 0, 0, 1, MPI_INT, 0, win);
-    test_verify("Put_notify reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
-    rc = MPI_Get_notify(&result, 1, MPI_INT, 0, 0, 1, MPI_INT, 0, win);
-    test_verify("Get_notify reports unsupported",
-                MPI_ERR_UNSUPPORTED_OPERATION == rc);
+    /* The blocking accumulate operations. */
     rc = MPI_Accumulate_notify(&src, 1, MPI_INT, 0, 0, 1, MPI_INT, MPI_SUM,
                                0, win);
     test_verify("Accumulate_notify reports unsupported",
@@ -113,8 +97,9 @@ int main(int argc, char *argv[])
 
     /* The guard sits ahead of the MPI_PROC_NULL no-op, so an unsupported
      * operation is reported identically no matter what the target is. */
-    rc = MPI_Put_notify(&src, 1, MPI_INT, MPI_PROC_NULL, 0, 1, MPI_INT, 0, win);
-    test_verify("Put_notify to MPI_PROC_NULL reports unsupported",
+    rc = MPI_Accumulate_notify(&src, 1, MPI_INT, MPI_PROC_NULL, 0, 1, MPI_INT,
+                               MPI_SUM, 0, win);
+    test_verify("Accumulate_notify to MPI_PROC_NULL reports unsupported",
                 MPI_ERR_UNSUPPORTED_OPERATION == rc);
     rc = MPI_Rput_notify(&src, 1, MPI_INT, MPI_PROC_NULL, 0, 1, MPI_INT, 0,
                          win, &req);
@@ -124,25 +109,36 @@ int main(int argc, char *argv[])
     /* Nothing above should have moved any data. */
     test_verify("no unsupported operation touched the window", 0 == base[0]);
 
+    MPI_Win_unlock_all(win);
+
     /* MPI-5.1 section 12.2.6: the notification bounds are cached on every
-     * window, including one whose component cannot do notified communication at
-     * all.  Reporting zero there is the honest answer, and is consistent with
-     * every operation above having been refused. */
+     * window.  osc/rdma can attach counters, so it must not report the zeros
+     * that mean "no notification support". */
     int *num_sb = NULL, *num_ub = NULL;
     MPI_Count *value_ub = NULL;
     int flag = 0;
 
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_NUM_SB, &num_sb, &flag);
-    test_verify("NUM_SB is present and zero without notification support",
-                MPI_SUCCESS == rc && flag && NULL != num_sb && 0 == *num_sb);
+    test_verify("NUM_SB is present and positive",
+                MPI_SUCCESS == rc && flag && NULL != num_sb && 0 < *num_sb);
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_NUM_UB, &num_ub, &flag);
-    test_verify("NUM_UB is present and zero without notification support",
-                MPI_SUCCESS == rc && flag && NULL != num_ub && 0 == *num_ub);
+    test_verify("NUM_UB is present and positive",
+                MPI_SUCCESS == rc && flag && NULL != num_ub && 0 < *num_ub);
+    test_verify("NUM_SB does not exceed NUM_UB",
+                NULL != num_sb && NULL != num_ub && *num_sb <= *num_ub);
     rc = MPI_Win_get_attr(win, MPI_WIN_NOTIFICATION_VALUE_UB, &value_ub, &flag);
-    test_verify("VALUE_UB is present and zero without notification support",
-                MPI_SUCCESS == rc && flag && NULL != value_ub && 0 == *value_ub);
+    test_verify("VALUE_UB is present and positive",
+                MPI_SUCCESS == rc && flag && NULL != value_ub && 0 < *value_ub);
 
-    MPI_Win_unlock_all(win);
+    /* Every count up to NUM_UB can be attached, and nothing beyond it. */
+    if (NULL != num_ub && 0 < *num_ub && INT_MAX > *num_ub) {
+        rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, *num_ub);
+        test_verify("Win_set_num_notify accepts NUM_UB counters", MPI_SUCCESS == rc);
+        rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, *num_ub + 1);
+        test_verify("Win_set_num_notify rejects more than NUM_UB counters",
+                    MPI_ERR_ARG == rc);
+    }
+
     MPI_Win_free(&win);
 
     int r = test_finalize();

@@ -113,6 +113,20 @@ OBJ_CLASS_DECLARATION(ompi_osc_rdma_handle_t);
 #define OMPI_OSC_RDMA_POST_PEER_MAX 32
 
 /**
+ * @brief number of notification counters allocated in the window state
+ *
+ * Notified communication (MPI Standard section 12.6) increments one of
+ * these counters at the target after the data movement of a put or get
+ * completes there. A fixed region is always allocated (and covered by the
+ * state registration) so that origins can update counters with btl atomics;
+ * only the first notify_counts[rank] counters are considered *attached* by
+ * MPI_WIN_SET_NUM_NOTIFY. The value is constant and not exposed as an MCA
+ * variable to keep the layout of the \ref ompi_osc_rdma_state_t structure
+ * simple. This value is the effective MPI_WIN_NOTIFICATION_NUM_UB.
+ */
+#define OMPI_OSC_RDMA_NOTIFY_MAX 16
+
+/**
  * @brief window state structure
  *
  * This structure holds the information relevant to the window state
@@ -138,6 +152,10 @@ struct ompi_osc_rdma_state_t {
     osc_rdma_counter_t num_complete_msgs;
     /** lock for the region state to ensure consistency */
     ompi_osc_rdma_lock_t regions_lock;
+    /** notification counters for notified communication. incremented by
+     * origin processes with btl (or CPU) atomics after the data movement
+     * of a notified operation has completed at this process */
+    osc_rdma_counter_t notify_counters[OMPI_OSC_RDMA_NOTIFY_MAX];
     /** displacement unit for this process */
     int64_t            disp_unit;
     /** number of attached regions. this count will be 1 in non-dynamic regions */

@@ -140,8 +140,11 @@ int ompi_osc_rdma_free(ompi_win_t *win)
         module->segment_base = NULL;
     }
 
+    ompi_osc_rdma_notify_counters_destroy (module);
+
     free (module->peer_array);
     free (module->outstanding_lock_array);
+    free (module->notify_counts);
     mca_mpool_base_default_module->mpool_free(mca_mpool_base_default_module,
                                               module->free_after);
     if (!module->use_accelerated_btl) {
@@ -151,6 +154,399 @@ int ompi_osc_rdma_free(ompi_win_t *win)
         free(module->alternate_am_rdmas);
     }
     free (module);
+
+    return OMPI_SUCCESS;
+}
+
+/* ******************* notified communication ******************* */
+
+/**
+ * @brief release every btl notification counter attached to this window
+ */
+void ompi_osc_rdma_notify_counters_destroy (ompi_osc_rdma_module_t *module)
+{
+    mca_btl_base_module_t *btl = module->use_accelerated_btl ? module->accelerated_btl : NULL;
+
+    for (int i = 0 ; i < OMPI_OSC_RDMA_NOTIFY_MAX ; ++i) {
+        if (NULL != module->notify_handles[i]) {
+            if (NULL != btl) {
+                (void) btl->btl_deregister_notification (btl, module->notify_handles[i]);
+            }
+            module->notify_handles[i] = NULL;
+        }
+    }
+
+    free (module->notify_peer_handles);
+    module->notify_peer_handles = NULL;
+    module->notify_stride = 0;
+    module->use_notify_counters = false;
+}
+
+/**
+ * @brief can this window notify through btl notification counters?
+ *
+ * Dynamic windows are excluded because a counter is bound to one registration
+ * and the attached regions of a dynamic window come and go.
+ */
+static bool ompi_osc_rdma_notify_counters_available (ompi_osc_rdma_module_t *module)
+{
+    return module->use_accelerated_btl && MPI_WIN_FLAVOR_DYNAMIC != module->flavor
+        && module->use_memory_registration && module->size
+        && !!(module->accelerated_btl->btl_flags & MCA_BTL_FLAGS_NOTIFIED_RMA);
+}
+
+/**
+ * @brief attach {my_count} notification counters to the window and publish their handles
+ *
+ * Each counter is a separate registration of the same window memory, so an
+ * origin picks which counter to advance purely by choosing which registration
+ * handle to target -- the adapter then counts the data movement itself and no
+ * follow-up atomic (nor a flush to order it behind the data) is required.
+ *
+ * Every rank in the group runs the same sequence of collectives here, whether
+ * or not its own registrations succeeded, so that a failure on one rank makes
+ * the whole window fall back rather than deadlocking the rest.
+ */
+static int ompi_osc_rdma_notify_counters_setup (ompi_osc_rdma_module_t *module, int my_count, int max_count)
+{
+    mca_btl_base_module_t *btl = module->accelerated_btl;
+    size_t handle_size = btl->btl_registration_handle_size;
+    ompi_osc_rdma_region_t *region;
+    unsigned char *my_handles = NULL;
+    int registered_ok = 1;
+    int all_ok = 0;
+    int ret;
+
+    /* a non-dynamic window always has exactly one region, which describes the
+     * memory the window was created over */
+    region = (ompi_osc_rdma_region_t *) module->state->regions;
+
+    module->notify_handle_size = handle_size;
+    module->notify_stride = max_count;
+
+    module->notify_peer_handles = calloc ((size_t) ompi_comm_size (module->comm) * (size_t) max_count,
+                                          handle_size);
+    my_handles = calloc ((size_t) max_count, handle_size);
+
+    if (NULL == module->notify_peer_handles || NULL == my_handles) {
+        registered_ok = 0;
+    }
+
+    for (int i = 0 ; registered_ok && i < my_count ; ++i) {
+        mca_btl_base_registration_handle_t *handle = NULL;
+
+        module->notify_handles[i] = btl->btl_register_notification (btl,
+                                                                    (void *) (intptr_t) region->base,
+                                                                    (size_t) region->len,
+                                                                    MCA_BTL_REG_FLAG_ACCESS_ANY, &handle);
+        if (OPAL_UNLIKELY(NULL == module->notify_handles[i])) {
+            /* leaving some indices counted by the adapter and others not would
+             * be worse than not using counters at all */
+            registered_ok = 0;
+            break;
+        }
+
+        memcpy (my_handles + (size_t) i * handle_size, handle, handle_size);
+    }
+
+    ret = module->comm->c_coll->coll_allreduce (&registered_ok, &all_ok, 1, MPI_INT, MPI_MIN, module->comm,
+                                                module->comm->c_coll->coll_allreduce_module);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        all_ok = 0;
+    }
+
+    if (!all_ok) {
+        free (my_handles);
+        ompi_osc_rdma_notify_counters_destroy (module);
+        /* not an error: the caller notifies with atomics instead */
+        return OMPI_SUCCESS;
+    }
+
+    ret = module->comm->c_coll->coll_allgather (my_handles, (int) ((size_t) max_count * handle_size), MPI_BYTE,
+                                                module->notify_peer_handles,
+                                                (int) ((size_t) max_count * handle_size), MPI_BYTE,
+                                                module->comm, module->comm->c_coll->coll_allgather_module);
+    free (my_handles);
+
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        ompi_osc_rdma_notify_counters_destroy (module);
+        return ret;
+    }
+
+    module->use_notify_counters = true;
+
+    OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_INFO, "notifying through %d btl notification counter(s)", my_count);
+
+    return OMPI_SUCCESS;
+}
+
+/**
+ * @brief atomically read and zero notification counter {notify} in the window state
+ *
+ * Remote origins increment this counter with btl atomics in both notification
+ * modes: a window that notifies through btl notification counters still falls
+ * back to the state counter for every transfer the adapter cannot count
+ * (non-contiguous datatypes, transfers over the put limit, gets). The
+ * read-and-zero therefore has to be atomic with respect to btl atomics. Use a
+ * CPU atomic only when the peer flags indicate it is safe to mix CPU and btl
+ * atomics, otherwise loop over a btl compare-and-swap on our own state.
+ */
+static int ompi_osc_rdma_notify_state_fetch_and_zero (ompi_osc_rdma_module_t *module, int notify,
+                                                      ompi_osc_rdma_lock_t *value)
+{
+    ompi_osc_rdma_peer_t *my_peer = module->my_peer;
+    ompi_osc_rdma_lock_t old_value;
+
+    if (ompi_osc_rdma_peer_local_state (my_peer)) {
+        old_value = module->state->notify_counters[notify];
+        while (!ompi_osc_rdma_lock_compare_exchange ((osc_rdma_atomic_counter_t *) (module->state->notify_counters + notify),
+                                                     &old_value, 0));
+    } else {
+        uint64_t address = (uint64_t) (intptr_t) my_peer->state + offsetof (ompi_osc_rdma_state_t, notify_counters) +
+            (uint64_t) notify * sizeof (osc_rdma_counter_t);
+        ompi_osc_rdma_lock_t result;
+        int ret;
+
+        /* the local value is a guess at the current value. if another origin
+         * updates the counter concurrently the compare-and-swap fails and
+         * returns the new value to retry with */
+        old_value = module->state->notify_counters[notify];
+
+        do {
+            ret = ompi_osc_rdma_lock_btl_cswap (module, my_peer, address, old_value, 0, &result);
+            if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+                return ret;
+            }
+
+            if (result == old_value) {
+                break;
+            }
+
+            old_value = result;
+        } while (1);
+    }
+
+    *value = old_value;
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_get_notify_value (struct ompi_win_t *win, int notify, OMPI_MPI_COUNT_TYPE *value)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    int my_rank = ompi_comm_rank (module->comm);
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, my_rank);
+
+    /* the standard's usage model is polling this function until a counter
+     * reaches a threshold. progress the module so counter updates arrive even
+     * when the btl requires target-side progress (emulated atomics). this
+     * applies with btl notification counters too, since the state counter
+     * still carries every notification the adapter cannot count */
+    ompi_osc_rdma_progress (module);
+
+    if (module->use_notify_counters) {
+        mca_btl_base_module_t *btl = module->accelerated_btl;
+        uint64_t hardware;
+        int ret;
+
+        ret = btl->btl_notification_read (btl, module->notify_handles[notify], &hardware);
+        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+            return ret;
+        }
+
+        /* origins on this node reach the window with a direct copy that the
+         * adapter never sees, so their notifications land in the state counter
+         * instead. both count operations on this index, so the value the
+         * standard asks for is their sum. */
+        *value = (OMPI_MPI_COUNT_TYPE) (hardware - module->notify_reset_base[notify]
+                                        + (uint64_t) ((volatile osc_rdma_counter_t *)
+                                                      module->state->notify_counters)[notify]);
+        /* ensure loads of the window data are not reordered before the counter read */
+        opal_atomic_rmb ();
+
+        return OMPI_SUCCESS;
+    }
+
+    *value = (OMPI_MPI_COUNT_TYPE) ((volatile osc_rdma_counter_t *) module->state->notify_counters)[notify];
+    /* ensure loads of the window data are not reordered before the counter read */
+    opal_atomic_rmb ();
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_reset_notify_value (struct ompi_win_t *win, int notify, OMPI_MPI_COUNT_TYPE *value)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    int my_rank = ompi_comm_rank (module->comm);
+    ompi_osc_rdma_lock_t old_value;
+    int ret;
+
+    OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, my_rank);
+
+    if (module->use_notify_counters) {
+        mca_btl_base_module_t *btl = module->accelerated_btl;
+        uint64_t hardware;
+
+        ret = btl->btl_notification_read (btl, module->notify_handles[notify], &hardware);
+        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+            return ret;
+        }
+
+        ret = ompi_osc_rdma_notify_state_fetch_and_zero (module, notify, &old_value);
+        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+            return ret;
+        }
+
+        /* the adapter's counter is monotonic and cannot be zeroed, so record
+         * where this reset happened and report differences from there. any
+         * increment that lands between the read above and the store below is
+         * simply attributed to the next interval, which is what an atomic
+         * fetch-and-zero at the instant of the read would also have done. the
+         * base only moves once both halves have been read, so a failure above
+         * loses no notifications. */
+        *value = (OMPI_MPI_COUNT_TYPE) (hardware - module->notify_reset_base[notify]) +
+            (OMPI_MPI_COUNT_TYPE) old_value;
+        module->notify_reset_base[notify] = hardware;
+
+        return OMPI_SUCCESS;
+    }
+
+    ret = ompi_osc_rdma_notify_state_fetch_and_zero (module, notify, &old_value);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    *value = (OMPI_MPI_COUNT_TYPE) old_value;
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_set_num_notify (struct ompi_win_t *win, struct opal_info_t *info, int num_notifications)
+{
+    /* reasons a rank cannot take part, in order of precedence when ranks disagree */
+    enum { NOTIFY_OK = 0, NOTIFY_ERR_ARG, NOTIFY_ERR_RMA_SYNC, NOTIFY_ERR_NO_MEM };
+    static const int notify_errors[] = {OMPI_SUCCESS, MPI_ERR_ARG, OMPI_ERR_RMA_SYNC,
+                                        OMPI_ERR_OUT_OF_RESOURCE};
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+    int my_rank = ompi_comm_rank (module->comm);
+    int max_count = 0, supported, all_supported = 0;
+    int my_status = NOTIFY_OK, status;
+    int my_count, ret;
+
+    (void) info; /* "mpi_assert_same_num_notifications" is an optimization hint only */
+
+    /* This is a synchronizing collective, so a rank that rejects its own call
+     * must not return before the rest of the group knows: it would leave them
+     * blocked in the allgather below. Every local failure is decided here,
+     * before any state changes, and agreed on with one allreduce, so the group
+     * either fails together with the attached counts unchanged or proceeds. */
+    if (OPAL_UNLIKELY(num_notifications < 0 || num_notifications > OMPI_OSC_RDMA_NOTIFY_MAX)) {
+        my_status = NOTIFY_ERR_ARG;
+    } else if (OPAL_UNLIKELY(ompi_osc_rdma_access_epoch_active (module))) {
+        /* it is erroneous to call MPI_WIN_SET_NUM_NOTIFY while an access epoch is open */
+        my_status = NOTIFY_ERR_RMA_SYNC;
+    } else if (NULL == module->notify_counts) {
+        module->notify_counts = calloc (ompi_comm_size (module->comm), sizeof (int));
+        if (OPAL_UNLIKELY(NULL == module->notify_counts)) {
+            my_status = NOTIFY_ERR_NO_MEM;
+        }
+    }
+
+    ret = module->comm->c_coll->coll_allreduce (&my_status, &status, 1, MPI_INT, MPI_MAX, module->comm,
+                                                module->comm->c_coll->coll_allreduce_module);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    if (OPAL_UNLIKELY(NOTIFY_OK != status)) {
+        /* report our own problem if we had one, otherwise the group's */
+        return notify_errors[NOTIFY_OK != my_status ? my_status : status];
+    }
+
+    /* the number of attached notification counters is never decreased (section 12.6.1) */
+    if (num_notifications > module->notify_counts[my_rank]) {
+        module->notify_counts[my_rank] = num_notifications;
+    }
+
+    /* all notification counters (existing and newly attached) are reset to zero by
+     * this call. no access epoch is open so no btl atomics can be in flight on them */
+    memset ((void *) module->state->notify_counters, 0, sizeof (module->state->notify_counters));
+    opal_atomic_wmb ();
+
+    /* publish every rank's attached count to the whole group so origins can validate
+     * notification indices against the target's count. this allgather doubles as the
+     * blocking, synchronizing collective required by the standard */
+    my_count = module->notify_counts[my_rank];
+    ret = module->comm->c_coll->coll_allgather (&my_count, 1, MPI_INT, module->notify_counts, 1, MPI_INT,
+                                                module->comm, module->comm->c_coll->coll_allgather_module);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    /* A hardware counter cannot be zeroed, so rather than track a reset base
+     * for a counter nobody has used yet, drop the existing registrations and
+     * attach fresh ones. This call is collective and no access epoch is open,
+     * so no origin can be holding a handle we are about to invalidate. */
+    ompi_osc_rdma_notify_counters_destroy (module);
+    memset (module->notify_reset_base, 0, sizeof (module->notify_reset_base));
+
+    for (int i = 0 ; i < ompi_comm_size (module->comm) ; ++i) {
+        if (module->notify_counts[i] > max_count) {
+            max_count = module->notify_counts[i];
+        }
+    }
+
+    if (0 == max_count) {
+        return OMPI_SUCCESS;
+    }
+
+    /* whether counters can be used has to be agreed group-wide: an origin
+     * chooses how to notify, and it must make the same choice its target made */
+    supported = ompi_osc_rdma_notify_counters_available (module) ? 1 : 0;
+    ret = module->comm->c_coll->coll_allreduce (&supported, &all_supported, 1, MPI_INT, MPI_MIN, module->comm,
+                                                module->comm->c_coll->coll_allreduce_module);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
+        return ret;
+    }
+
+    if (all_supported) {
+        /* falls back silently (leaving use_notify_counters clear) if the
+         * adapter will not hand out counters everywhere */
+        ret = ompi_osc_rdma_notify_counters_setup (module, my_count, max_count);
+    }
+
+    return ret;
+}
+
+int ompi_osc_rdma_win_get_num_notify (struct ompi_win_t *win, int target_rank, int *num_notifications)
+{
+    ompi_osc_rdma_module_t *module = GET_MODULE(win);
+
+    if (OPAL_UNLIKELY(target_rank < 0 || target_rank >= ompi_comm_size (module->comm))) {
+        return MPI_ERR_RANK;
+    }
+
+    *num_notifications = (NULL != module->notify_counts) ? module->notify_counts[target_rank] : 0;
+
+    return OMPI_SUCCESS;
+}
+
+int ompi_osc_rdma_win_get_notify_bounds (struct ompi_win_t *win __opal_attribute_unused__, int *num_sb,
+                                         int *num_ub, OMPI_MPI_COUNT_TYPE *value_ub)
+{
+    /* MPI-5.1 section 12.6.1: NUM_UB is the number of counters the
+     * implementation supports, NUM_SB the number it supports efficiently. The
+     * counters live in a fixed region of the window state, so any count up to
+     * OMPI_OSC_RDMA_NOTIFY_MAX costs the same and MPI_WIN_SET_NUM_NOTIFY rejects
+     * anything beyond it. */
+    *num_sb = OMPI_OSC_RDMA_NOTIFY_MAX;
+    *num_ub = OMPI_OSC_RDMA_NOTIFY_MAX;
+
+    /* the state counters are int64_t and the btl counters are reported as a
+     * difference from a base, both only ever incremented by one per notified
+     * operation, and the value is returned as a signed MPI_Count */
+    *value_ub = (OMPI_MPI_COUNT_TYPE) INT64_MAX;
 
     return OMPI_SUCCESS;
 }

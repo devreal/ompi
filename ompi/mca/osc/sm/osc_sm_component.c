@@ -25,6 +25,8 @@
 
 #include "ompi_config.h"
 
+#include <limits.h>
+
 #include "ompi/mca/osc/osc.h"
 #include "ompi/mca/osc/base/base.h"
 #include "ompi/mca/osc/base/osc_base_obj_convert.h"
@@ -313,6 +315,7 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
     int ret = OMPI_ERROR;
     size_t memory_alignment = OPAL_ALIGN_MIN;
     unsigned int notify_assert = 0, notify_reserved = 0;
+    bool notify_assert_bad = false;
 
     assert(MPI_WIN_FLAVOR_SHARED == flavor || MPI_WIN_FLAVOR_ALLOCATE == flavor);
 
@@ -346,7 +349,15 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
     /* How many notification counters to reserve per MPI process.  Read before
      * the segment is sized, since the reservation is part of its layout. */
     ret = osc_sm_reserved_notify_counters(info, &notify_assert, &notify_reserved);
-    if (OMPI_SUCCESS != ret) goto error;
+    if (OMPI_SUCCESS != ret) {
+        /* The info key is per process, so a malformed value may be local to
+         * this rank.  Window creation is collective: returning now would leave
+         * every other rank blocked in the allgather below.  A single-process
+         * window has nobody to agree with and can fail now; otherwise the
+         * problem rides through that allgather so all ranks fail together. */
+        if (1 == comm_size) goto error;
+        notify_assert_bad = true;
+    }
     module->notify_max_assert = notify_assert;
     snprintf(module->notify_max_assert_str, sizeof(module->notify_max_assert_str), "%u",
              notify_assert);
@@ -428,7 +439,9 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         }
 
         gather_values[0] = size;
-        gather_values[1] = notify_reserved;
+        /* Reservations come from an unsigned int, so they can never equal
+         * ULONG_MAX */
+        gather_values[1] = notify_assert_bad ? ULONG_MAX : notify_reserved;
         ret = module->comm->c_coll->coll_allgather(gather_values, 2, MPI_UNSIGNED_LONG,
                                                   rbuf, 2, MPI_UNSIGNED_LONG,
                                                   module->comm,
@@ -436,6 +449,17 @@ component_select(struct ompi_win_t *win, void **base, size_t size, ptrdiff_t dis
         if (OMPI_SUCCESS != ret) {
             free(rbuf);
             goto error;
+        }
+
+        for (i = 0 ; i < comm_size ; ++i) {
+            if (ULONG_MAX == rbuf[2 * i + 1]) {
+                /* Some rank was given a malformed mpi_assert_max_num_notify.
+                 * Every rank sees the same gathered array, so they all fail
+                 * here, before the segment is created. */
+                free(rbuf);
+                ret = MPI_ERR_INFO;
+                goto error;
+            }
         }
 
         total = 0;

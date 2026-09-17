@@ -219,6 +219,20 @@ static int mca_btl_ofi_component_register(void)
                                     MCA_BASE_VAR_SCOPE_READONLY,
                                     &mca_btl_ofi_component.disable_hmem);
 
+    mca_btl_ofi_component.enable_rma_event = true;
+    mca_base_component_var_register(&mca_btl_ofi_component.super.btl_version,
+                                    "enable_rma_event",
+                                    "Request FI_RMA_EVENT so notification counters can be bound "
+                                    "to memory regions, enabling RMA with notification in a "
+                                    "single operation. It is only requested from the provider "
+                                    "and NIC already selected, so it never changes which "
+                                    "provider is used; if that provider does not offer it, "
+                                    "notification counters are simply not used.",
+                                    MCA_BASE_VAR_TYPE_BOOL, NULL, 0, 0,
+                                    OPAL_INFO_LVL_5,
+                                    MCA_BASE_VAR_SCOPE_READONLY,
+                                    &mca_btl_ofi_component.enable_rma_event);
+
 
     /* for now we want this component to lose to the MTL. */
     module->super.btl_exclusivity = MCA_BTL_EXCLUSIVITY_HIGH - 50;
@@ -261,6 +275,65 @@ void mca_btl_ofi_exit(void)
  *   then create a BTL instance for selected interfaces
  */
 
+/**
+ * Look for a variant of {info} -- the same provider on the same NIC -- that
+ * also offers FI_RMA_EVENT, so notification counters can be bound to its
+ * memory regions.
+ *
+ * FI_RMA_EVENT is a secondary capability, and fi_getinfo only returns
+ * providers that support every secondary capability in the hints. Asking for
+ * it during provider selection would therefore steer the btl to whichever
+ * provider happens to offer it, e.g. a TCP provider over the RDMA NIC. Asking
+ * only once a provider has been selected can add the capability but never
+ * changes the choice.
+ *
+ * @param[in] info         the selected provider
+ * @param[in] api_version  version the selection query succeeded with
+ * @param[in] mode         mode bits this btl supports (as in the selection hints)
+ * @param[in] mr_mode      memory registration modes this btl supports (likewise)
+ *
+ * @returns a new fi_info the caller must free, or NULL if the provider does not
+ * offer FI_RMA_EVENT there. {info} remains usable either way.
+ */
+static struct fi_info *mca_btl_ofi_rma_event_info(struct fi_info *info, uint32_t api_version,
+                                                  uint64_t mode, int mr_mode)
+{
+    struct fi_info *hints, *info_list = NULL, *match = NULL;
+    int rc;
+
+    hints = fi_dupinfo(info);
+    if (NULL == hints) {
+        return NULL;
+    }
+
+    hints->caps |= FI_RMA_EVENT;
+    hints->mode = mode;
+    /* counters are registered with FI_RMA_EVENT and enabled once bound, which
+     * is what this mode asks of the application */
+    hints->domain_attr->mr_mode = mr_mode | FI_MR_RMA_EVENT;
+
+    rc = fi_getinfo(api_version, NULL, NULL, 0, hints, &info_list);
+    (void) fi_freeinfo(hints);
+    if (0 != rc) {
+        BTL_VERBOSE(("%s does not offer FI_RMA_EVENT on %s: %s", info->fabric_attr->prov_name,
+                     info->domain_attr->name, fi_strerror(-rc)));
+        return NULL;
+    }
+
+    for (struct fi_info *cur = info_list; NULL != cur; cur = cur->next) {
+        if ((cur->caps & FI_RMA_EVENT)
+            && 0 == strcmp(cur->fabric_attr->prov_name, info->fabric_attr->prov_name)
+            && 0 == strcmp(cur->domain_attr->name, info->domain_attr->name)) {
+            match = fi_dupinfo(cur);
+            break;
+        }
+    }
+
+    (void) fi_freeinfo(info_list);
+
+    return match;
+}
+
 static mca_btl_base_module_t **mca_btl_ofi_component_init(int *num_btl_modules,
                                                           bool enable_progress_threads,
                                                           bool enable_mpi_threads)
@@ -292,7 +365,9 @@ static mca_btl_base_module_t **mca_btl_ofi_component_init(int *num_btl_modules,
     struct fi_tx_attr tx_attr = {0};
     struct fi_fabric_attr fabric_attr = {0};
     struct fi_domain_attr domain_attr = {0};
+    struct fi_info *rma_event_info = NULL;
     uint64_t required_caps;
+    uint32_t api_version = FI_VERSION(1, 18);
 
     switch (mca_btl_ofi_component.mode) {
 
@@ -384,15 +459,17 @@ no_hmem:
 
     /* Do the query. The earliest version that supports FI_HMEM hints is 1.9.
      * The earliest version the explictly allow provider to call CUDA API is 1.18  */
-    rc = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0, &hints, &info_list);
+    api_version = FI_VERSION(1, 18);
+    rc = fi_getinfo(api_version, NULL, NULL, 0, &hints, &info_list);
     if (FI_ENODATA == -rc && (hints.fabric_attr->fabric || hints.domain_attr->domain)) {
         /* Retry without fabric and domain */
         hints.fabric_attr->fabric = NULL;
         hints.domain_attr->domain = NULL;
-        rc = fi_getinfo(FI_VERSION(1, 18), NULL, NULL, 0, &hints, &info_list);
+        rc = fi_getinfo(api_version, NULL, NULL, 0, &hints, &info_list);
     }
     if (FI_ENOSYS == -rc) {
-        rc = fi_getinfo(FI_VERSION(1, 9), NULL, NULL, 0, &hints, &info_list);
+        api_version = FI_VERSION(1, 9);
+        rc = fi_getinfo(api_version, NULL, NULL, 0, &hints, &info_list);
     }
 
     if ((FI_ENODATA == -rc)
@@ -467,7 +544,27 @@ no_hmem:
              * capabilities as the initial one.
              */
             selected_info = opal_common_ofi_select_provider(info, &opal_process_info);
-            rc = mca_btl_ofi_init_device(selected_info);
+
+            /* Notification counters are an optimization: try the same
+             * provider and NIC with FI_RMA_EVENT first, and use the plain
+             * variant if that is not offered or does not initialize. */
+            rc = OPAL_ERR_NOT_AVAILABLE;
+            if (mca_btl_ofi_component.enable_rma_event && !(selected_info->caps & FI_RMA_EVENT)) {
+                if (NULL != rma_event_info) {
+                    (void) fi_freeinfo(rma_event_info);
+                }
+                rma_event_info = mca_btl_ofi_rma_event_info(selected_info, api_version, hints.mode,
+                                                            hints.domain_attr->mr_mode);
+                if (NULL != rma_event_info) {
+                    rc = mca_btl_ofi_init_device(rma_event_info);
+                    if (OPAL_SUCCESS == rc) {
+                        selected_info = rma_event_info;
+                    }
+                }
+            }
+            if (OPAL_SUCCESS != rc) {
+                rc = mca_btl_ofi_init_device(selected_info);
+            }
             if (OPAL_SUCCESS == rc) {
                 info = selected_info;
                 break;
@@ -504,6 +601,11 @@ out:
     }
     if (info_list) {
         (void) fi_freeinfo(info_list);
+    }
+    /* freed alongside info_list: a module keeps pointers into the fi_info it
+     * was initialized from */
+    if (rma_event_info) {
+        (void) fi_freeinfo(rma_event_info);
     }
 
     return base_modules;
@@ -680,6 +782,18 @@ static int mca_btl_ofi_init_device(struct fi_info *info)
     }
 #endif
 
+    /* Notification counters are bound to memory regions, so they are only
+     * meaningful when this module does RDMA at all. btl_register_mem is set
+     * by mca_btl_ofi_module_alloc() for the one-sided modes only. */
+    if ((ofi_info->caps & FI_RMA_EVENT) && NULL != module->super.btl_register_mem) {
+        module->super.btl_flags |= MCA_BTL_FLAGS_NOTIFIED_RMA;
+        module->super.btl_register_notification = mca_btl_ofi_register_notification;
+        module->super.btl_deregister_notification = mca_btl_ofi_deregister_notification;
+        module->super.btl_notification_read = mca_btl_ofi_notification_read;
+        module->super.btl_notification_wait = mca_btl_ofi_notification_wait;
+        BTL_VERBOSE(("%s supports notification counters", linux_device_name));
+    }
+
     if (ofi_info->domain_attr->mr_mode == MCA_BTL_OFI_MR_BASIC
         || ofi_info->domain_attr->mr_mode & FI_MR_VIRT_ADDR) {
         module->use_virt_addr = true;
@@ -687,6 +801,10 @@ static int mca_btl_ofi_init_device(struct fi_info *info)
 
     if (ofi_info->domain_attr->mr_mode & FI_MR_ENDPOINT) {
         module->use_fi_mr_bind = true;
+    }
+
+    if (ofi_info->domain_attr->mr_mode & FI_MR_RMA_EVENT) {
+        module->use_mr_rma_event = true;
     }
 
     /* create endpoint list */

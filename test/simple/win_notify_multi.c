@@ -16,9 +16,10 @@
  * untested: the notification counters carved out of the shared segment at
  * window creation, the allgather that sizes them, the collective
  * reallocation MPI_Win_set_num_notify performs when a rank asks for more
- * counters than were reserved, and the recomputation of each rank's
- * counter base that follows it.  This program exercises those, so it has
- * to be launched as a real job:
+ * counters than were reserved, the recomputation of each rank's counter
+ * base that follows it, and the group failing together when only one rank
+ * passes an invalid argument to a collective.  This program exercises
+ * those, so it has to be launched as a real job:
  *
  *     mpirun --np 4 ./win_notify_multi
  *
@@ -353,6 +354,80 @@ static void test_info_and_attributes(void)
 
 /* ------------------------------------------------------------------ */
 
+/* mpi_assert_max_num_notify is per process, so a malformed value may reach
+ * only one rank.  Window creation is collective: that rank must not give up
+ * on its own, or every other rank blocks in the creation forever.  They all
+ * have to fail together instead. */
+static void test_one_rank_bad_assert(void)
+{
+    MPI_Info info = MPI_INFO_NULL;
+    MPI_Win win = MPI_WIN_NULL;
+    int *base = NULL;
+    int rc;
+
+    MPI_Info_create(&info);
+    MPI_Info_set(info, "mpi_assert_max_num_notify", (0 == rank) ? "-1" : "8");
+
+    rc = MPI_Win_allocate_shared(win_elems * sizeof(int), sizeof(int), info,
+                                 MPI_COMM_WORLD, &base, &win);
+    MPI_Info_free(&info);
+
+    /* A window that exists on some ranks and not others cannot be freed
+     * collectively, so a wrongly created one is reported and left alone. */
+    check("window creation fails on every rank when one rank's assertion "
+          "is malformed", MPI_SUCCESS != rc);
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
+/* The same holds for MPI_Win_set_num_notify: a rank with an invalid count
+ * must not leave the group blocked, and ranks whose own count was valid must
+ * not act on it.  The call fails everywhere, with every attached count and
+ * every counter as it was. */
+static void test_one_rank_bad_count(void)
+{
+    int *base = NULL;
+    MPI_Win win;
+    int right = (rank + 1) % nprocs;
+    int num = -1;
+    int i, rc;
+
+    win = make_window(MPI_INFO_NULL, &base);
+    if (MPI_WIN_NULL == win) {
+        return;
+    }
+
+    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, 2);
+    check("Win_set_num_notify succeeds within the reservation",
+          MPI_SUCCESS == rc);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    MPI_Win_lock_all(0, win);
+    rc = MPI_Put_notify(&rank, 1, MPI_INT, right, 0, 1, MPI_INT, 1, win);
+    check("Put_notify to the right neighbour succeeds", MPI_SUCCESS == rc);
+    MPI_Win_flush(right, win);
+    check("the notification from the left neighbour arrives",
+          await_notify(win, 1, 1));
+    MPI_Win_unlock_all(win);
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    rc = MPI_Win_set_num_notify(win, MPI_INFO_NULL, (0 == rank) ? -1 : 3);
+    check("Win_set_num_notify fails on every rank when one rank's count "
+          "is invalid", MPI_ERR_ARG == rc);
+
+    for (i = 0 ; i < nprocs ; ++i) {
+        rc = MPI_Win_get_num_notify(win, i, &num);
+        check("a failed Win_set_num_notify leaves every attached count "
+              "unchanged", MPI_SUCCESS == rc && 2 == num);
+    }
+    check("a failed Win_set_num_notify leaves the counters unchanged",
+          await_notify(win, 1, 1));
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Win_free(&win);
+}
+
+/* ------------------------------------------------------------------ */
+
 int main(int argc, char *argv[])
 {
     int *base = NULL;
@@ -409,6 +484,8 @@ int main(int argc, char *argv[])
     test_collective_growth();
     test_asymmetric_counts();
     test_info_and_attributes();
+    test_one_rank_bad_assert();
+    test_one_rank_bad_count();
 
     MPI_Allreduce(&failures, &total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     if (0 == rank) {
