@@ -163,6 +163,13 @@ osc_sm_grow_notify_counters(ompi_osc_sm_module_t *module, const unsigned long *n
     }
 
     if (0 != status) {
+        /* Every MPI process has already tried to attach, so nobody needs the
+         * name any more.  Rank 0 created the backing file and must remove it,
+         * or it outlives the job in the backing directory.  Unlink before
+         * detaching: detach resets the descriptor, including the name. */
+        if (0 == rank) {
+            opal_shmem_unlink(&new_seg_ds);
+        }
         if (NULL != new_base) {
             opal_shmem_segment_detach(&new_seg_ds);
         }
@@ -249,7 +256,6 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
         }
         /* Valid counts come from an int, so they can never equal ULONG_MAX */
         requested = ULONG_MAX;
-        goto agree;
     }
 
     /* mpi_assert_max_num_notify is this rank's promise not to ask for more
@@ -257,18 +263,17 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
      * request above the current capacity but within the promise is served by
      * growing into a new shared segment. */
 
-    memset((void *) module->notify_bases[rank], 0,
-           module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
-    module->node_states[rank].notify_counter_count =
-        (requested > module->node_states[rank].notify_counter_capacity)
-            ? module->node_states[rank].notify_counter_capacity
-            : (uint32_t) requested;
-    opal_atomic_wmb();
-
     if (1 == comm_size) {
         /* No shared segment for a single-process window; the counters are a
          * plain allocation, so growing them is a plain reallocation and none of
          * the collective machinery below applies. */
+        memset((void *) module->notify_bases[0], 0,
+               module->node_states[0].notify_counter_capacity * sizeof(int64_t));
+        module->node_states[0].notify_counter_count =
+            (requested > module->node_states[0].notify_counter_capacity)
+                ? module->node_states[0].notify_counter_capacity
+                : (uint32_t) requested;
+
         if (requested > module->node_states[0].notify_counter_capacity) {
             void *grown = calloc(requested, sizeof(int64_t));
             if (NULL == grown) {
@@ -282,7 +287,6 @@ ompi_osc_sm_win_set_num_notify(struct ompi_win_t *win,
         return OMPI_SUCCESS;
     }
 
-agree:
     new_caps = malloc(sizeof(*new_caps) * comm_size);
     if (NULL == new_caps) {
         return OMPI_ERR_TEMP_OUT_OF_RESOURCE;
@@ -325,7 +329,19 @@ agree:
 
     free(new_caps);
 
-    return OMPI_SUCCESS;
+    /* The group agreed the request is valid and fits the existing counters, so
+     * only now reset them (MPI-5.1 section 12.6.1) and publish the new count --
+     * a failed call above leaves both untouched.  Origins validate indices
+     * against the count in node_states, which each rank writes for itself, so
+     * nobody may return until everyone has published.  The barrier provides
+     * that, and it also ensures no origin can notify us before our reset. */
+    memset((void *) module->notify_bases[rank], 0,
+           module->node_states[rank].notify_counter_capacity * sizeof(int64_t));
+    module->node_states[rank].notify_counter_count = (uint32_t) requested;
+    opal_atomic_wmb();
+
+    return module->comm->c_coll->coll_barrier(module->comm,
+                                              module->comm->c_coll->coll_barrier_module);
 }
 
 int
