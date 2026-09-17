@@ -139,6 +139,7 @@ ompi_osc_base_module_t ompi_osc_rdma_module_rdma_template = {
     .osc_win_reset_notify_value = ompi_osc_rdma_win_reset_notify_value,
     .osc_win_set_num_notify = ompi_osc_rdma_win_set_num_notify,
     .osc_win_get_num_notify = ompi_osc_rdma_win_get_num_notify,
+    .osc_win_get_notify_bounds = ompi_osc_rdma_win_get_notify_bounds,
 
     .osc_fence = ompi_osc_rdma_fence_atomic,
 

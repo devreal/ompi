@@ -969,21 +969,23 @@ static void ompi_osc_rdma_notify_atomic_complete (void *cbdata, void *cbcontext,
  * the notification is visible at the target) waits for it.
  */
 /**
- * @brief can this notified operation be carried by a single btl operation?
+ * @brief can this notified put be carried by a single btl operation?
  *
  * When the btl provides notification counters the notification is a side
  * effect of the data movement: the origin targets the registration handle the
  * target published for that notification index and the adapter increments the
- * matching counter once per operation it completes. That equivalence only
+ * matching counter once per remote write it completes. That equivalence only
  * holds when the transfer maps to exactly one btl operation, since the counter
  * counts operations and the standard requires exactly one increment per
  * notified call, so everything that might be split or served without touching
- * the adapter has to take the atomic path instead.
+ * the adapter has to take the atomic path instead. The counters only count
+ * remote writes (see MCA_BTL_FLAGS_NOTIFIED_RMA), so a notified get always
+ * takes the atomic path.
  */
 static inline bool ompi_osc_rdma_notify_single_op (ompi_osc_rdma_module_t *module, ompi_osc_rdma_peer_t *peer,
                                                    size_t origin_count, ompi_datatype_t *origin_datatype,
                                                    size_t target_count, ompi_datatype_t *target_datatype,
-                                                   size_t limit, size_t alignment, size_t *size)
+                                                   size_t limit, size_t *size)
 {
     size_t origin_size, target_size;
 
@@ -1008,12 +1010,6 @@ static inline bool ompi_osc_rdma_notify_single_op (ompi_osc_rdma_module_t *modul
     target_size *= target_count;
 
     if (origin_size != target_size || 0 == origin_size || origin_size > limit) {
-        return false;
-    }
-
-    /* a transfer that does not meet the btl's alignment requirement is broken
-     * into a head, a body and a tail */
-    if (alignment && (origin_size & (alignment - 1))) {
         return false;
     }
 
@@ -1077,7 +1073,7 @@ int ompi_osc_rdma_put_notify (const void *origin_addr, size_t origin_count, ompi
      * with the put itself: no second operation to issue and nothing to order
      * it against, so the origin never has to stall here */
     if (ompi_osc_rdma_notify_single_op (module, peer, origin_count, origin_datatype, target_count,
-                                        target_datatype, module->put_limit, 0, &size)) {
+                                        target_datatype, module->put_limit, &size)) {
         mca_btl_base_registration_handle_t *target_handle;
         uint64_t target_address;
 
@@ -1115,7 +1111,6 @@ int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datat
     ompi_osc_rdma_module_t *module = GET_MODULE(win);
     ompi_osc_rdma_peer_t *peer;
     ompi_osc_rdma_sync_t *sync;
-    size_t size;
     int ret;
 
     OSC_RDMA_VERBOSE(MCA_BASE_VERBOSE_TRACE, "get_notify: 0x%lx, %zu, %s, %d, %d, %zu, %s, %d, %s",
@@ -1129,25 +1124,8 @@ int ompi_osc_rdma_get_notify (void *origin_addr, size_t origin_count, ompi_datat
         return OMPI_ERR_RMA_SYNC;
     }
 
-    if (ompi_osc_rdma_notify_single_op (module, peer, origin_count, origin_datatype, source_count,
-                                        source_datatype, module->get_limit, module->get_alignment, &size)) {
-        mca_btl_base_registration_handle_t *source_handle;
-        uint64_t source_address;
-
-        ret = osc_rdma_get_remote_segment (module, peer, source_disp, size, &source_address, &source_handle);
-        if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {
-            return ret;
-        }
-
-        /* an unaligned source is fetched as a head, a body and a tail, which
-         * the adapter would count three times */
-        if (!(source_address & ALIGNMENT_MASK(module->get_alignment))) {
-            return ompi_osc_rdma_get_contig (sync, peer, source_address,
-                                             ompi_osc_rdma_peer_notify_handle (module, source_rank, notify),
-                                             origin_addr, size, NULL);
-        }
-    }
-
+    /* no btl notification counter path: the counters only count remote writes,
+     * so a remote read through a notification handle would never be counted */
     ret = ompi_osc_rdma_get_w_req (sync, origin_addr, origin_count, origin_datatype, peer,
                                    source_disp, source_count, source_datatype, NULL);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != ret)) {

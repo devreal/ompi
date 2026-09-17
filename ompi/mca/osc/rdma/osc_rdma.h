@@ -369,7 +369,7 @@ int ompi_osc_rdma_free (struct ompi_win_t *win);
 #define OMPI_OSC_RDMA_CHECK_NOTIFY_IDX(module, notify, rank)                  \
     if (OPAL_UNLIKELY(NULL == (module)->notify_counts || (notify) < 0 ||      \
                       (notify) >= (module)->notify_counts[(rank)])) {         \
-        return MPI_ERR_NOTIFY_IDX;                                            \
+        return MPI_ERR_RMA_NOTIFICATION;                                      \
     }
 
 /**
@@ -395,6 +395,8 @@ int ompi_osc_rdma_win_reset_notify_value (struct ompi_win_t *win, int notify,
                                           OMPI_MPI_COUNT_TYPE *value);
 int ompi_osc_rdma_win_set_num_notify (struct ompi_win_t *win, struct opal_info_t *info,
                                       int num_notifications);
+int ompi_osc_rdma_win_get_notify_bounds (struct ompi_win_t *win, int *num_sb, int *num_ub,
+                                         OMPI_MPI_COUNT_TYPE *value_ub);
 int ompi_osc_rdma_win_get_num_notify (struct ompi_win_t *win, int target_rank,
                                       int *num_notifications);
 
