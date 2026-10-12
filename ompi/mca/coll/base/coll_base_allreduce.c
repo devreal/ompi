@@ -406,7 +406,8 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
     int early_segcount, late_segcount, split_rank, max_segcount;
     size_t typelng;
     char *tmpsend = NULL, *tmprecv = NULL, *inbuf[2] = {NULL, NULL};
-    ptrdiff_t true_lb, true_extent, lb, extent;
+    char *inbuf_free[2] = {NULL, NULL};
+    ptrdiff_t lb, extent, gap;
     ptrdiff_t block_offset, max_real_segsize;
     ompi_request_t *reqs[2] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL};
 
@@ -450,8 +451,6 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
     /* Allocate and initialize temporary buffers */
     ret = ompi_datatype_get_extent(dtype, &lb, &extent);
     if (MPI_SUCCESS != ret) { line = __LINE__; goto error_hndl; }
-    ret = ompi_datatype_get_true_extent(dtype, &true_lb, &true_extent);
-    if (MPI_SUCCESS != ret) { line = __LINE__; goto error_hndl; }
     ret = ompi_datatype_type_size( dtype, &typelng);
     if (MPI_SUCCESS != ret) { line = __LINE__; goto error_hndl; }
 
@@ -465,14 +464,15 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
     COLL_BASE_COMPUTE_BLOCKCOUNT( count, size, split_rank,
                                    early_segcount, late_segcount );
     max_segcount = early_segcount;
-    max_real_segsize = true_extent + (max_segcount - 1) * extent;
+    max_real_segsize = opal_datatype_span(&dtype->super, max_segcount, &gap);
 
-
-    inbuf[0] = (char*)malloc(max_real_segsize);
-    if (NULL == inbuf[0]) { ret = -1; line = __LINE__; goto error_hndl; }
+    inbuf_free[0] = (char*)malloc(max_real_segsize);
+    if (NULL == inbuf_free[0]) { ret = -1; line = __LINE__; goto error_hndl; }
+    inbuf[0] = inbuf_free[0] - gap;
     if (size > 2) {
-        inbuf[1] = (char*)malloc(max_real_segsize);
-        if (NULL == inbuf[1]) { ret = -1; line = __LINE__; goto error_hndl; }
+        inbuf_free[1] = (char*)malloc(max_real_segsize);
+        if (NULL == inbuf_free[1]) { ret = -1; line = __LINE__; goto error_hndl; }
+        inbuf[1] = inbuf_free[1] - gap;
     }
 
     /* Our input data is not copied into rbuf. Instead, our block is sent
@@ -595,8 +595,8 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
 
     }
 
-    if (NULL != inbuf[0]) free(inbuf[0]);
-    if (NULL != inbuf[1]) free(inbuf[1]);
+    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
+    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
 
     return MPI_SUCCESS;
 
@@ -605,8 +605,8 @@ ompi_coll_base_allreduce_intra_ring(const void *sbuf, void *rbuf, size_t count,
                  __FILE__, line, rank, ret));
     ompi_coll_base_free_reqs(reqs, 2);
     (void)line;  // silence compiler warning
-    if (NULL != inbuf[0]) free(inbuf[0]);
-    if (NULL != inbuf[1]) free(inbuf[1]);
+    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
+    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
     return ret;
 }
 
@@ -702,6 +702,7 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
     int num_phases, phase, block_count, inbi;
     size_t typelng, segcount, max_segcount;
     char *tmpsend = NULL, *tmprecv = NULL, *inbuf[2] = {NULL, NULL};
+    char *inbuf_free[2] = {NULL, NULL};
     ptrdiff_t block_offset, max_real_segsize;
     ompi_request_t *reqs[2] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL};
     ptrdiff_t lb, extent, gap;
@@ -770,11 +771,13 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
      max_real_segsize = opal_datatype_span(&dtype->super, max_segcount, &gap);
 
     /* Allocate and initialize temporary buffers */
-    inbuf[0] = (char*)malloc(max_real_segsize);
-    if (NULL == inbuf[0]) { ret = -1; line = __LINE__; goto error_hndl; }
+    inbuf_free[0] = (char*)malloc(max_real_segsize);
+    if (NULL == inbuf_free[0]) { ret = -1; line = __LINE__; goto error_hndl; }
+    inbuf[0] = inbuf_free[0] - gap;
     if (size > 2) {
-        inbuf[1] = (char*)malloc(max_real_segsize);
-        if (NULL == inbuf[1]) { ret = -1; line = __LINE__; goto error_hndl; }
+        inbuf_free[1] = (char*)malloc(max_real_segsize);
+        if (NULL == inbuf_free[1]) { ret = -1; line = __LINE__; goto error_hndl; }
+        inbuf[1] = inbuf_free[1] - gap;
     }
 
     /* Our input data is not copied into rbuf. As in the regular ring, each
@@ -930,8 +933,8 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
 
     }
 
-    if (NULL != inbuf[0]) free(inbuf[0]);
-    if (NULL != inbuf[1]) free(inbuf[1]);
+    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
+    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
 
     return MPI_SUCCESS;
 
@@ -940,8 +943,8 @@ ompi_coll_base_allreduce_intra_ring_segmented(const void *sbuf, void *rbuf, size
                  __FILE__, line, rank, ret));
     ompi_coll_base_free_reqs(reqs, 2);
     (void)line;  // silence compiler warning
-    if (NULL != inbuf[0]) free(inbuf[0]);
-    if (NULL != inbuf[1]) free(inbuf[1]);
+    if (NULL != inbuf_free[0]) free(inbuf_free[0]);
+    if (NULL != inbuf_free[1]) free(inbuf_free[1]);
     return ret;
 }
 
